@@ -58,4 +58,4 @@ jobs:
         labels: ${{ steps.meta.outputs.labels }}
         
     - name: Echo Outputs
-      run: echo "Pushed tags: ${{ steps.build-and-push.outputs.metadata }}" 
+      run: echo "Pushed tags: ${{ steps.build-and-push.outputs.metadata }}"

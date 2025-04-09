@@ -54,17 +54,17 @@ A generic database migrator tool for .NET 9, supporting MSSQL, PostgreSQL, and S
 
 ## Running in Docker
 
-1.  **Build the Image:** From the root of the repository:
+1.  **Build the Image:** (Optional, if not using pre-built from Docker Hub)
     ```bash
-    docker build -t migrator-runner -f src/Migrator.Runner/Dockerfile .
+    docker build -t bthdev/db-migration-runner -f src/Migrator.Runner/Dockerfile .
     ```
-2.  **Run the Container:** Mount your local migrations folder into the container and provide arguments.
+2.  **Run the Container:** Mount your local migrations folder into the container and provide arguments. Use the image `bthdev/db-migration-runner:latest` (or a specific version tag).
 
     **Windows (PowerShell/CMD):**
     ```bash
     docker run --rm `
       -v C:\my-app-migrations:/app/migrations `
-      migrator-runner `
+      bthdev/db-migration-runner:latest `
       --type SqlServer `
       --connection "Your_Connection_String_Accessible_From_Container" `
       --path /app/migrations
@@ -74,12 +74,12 @@ A generic database migrator tool for .NET 9, supporting MSSQL, PostgreSQL, and S
     ```bash
     docker run --rm \
       -v /path/to/my-app-migrations:/app/migrations \
-      migrator-runner \
+      bthdev/db-migration-runner:latest \
       --type SqlServer \
       --connection "Your_Connection_String_Accessible_From_Container" \
       --path /app/migrations
     ```
-    *   Replace `<host_path>` with the absolute path to your local migrations folder.
+    *   Replace the host path (`C:\...` or `/path/to/...`) with the absolute path to your local migrations folder.
     *   Ensure the `--path` argument points to `/app/migrations` (the mount path inside the container).
     *   Make sure the database is accessible from the container (use Docker networking like `host.docker.internal` if needed).
 
@@ -89,7 +89,7 @@ This example demonstrates running the migrator as a Kubernetes Job, suitable for
 
 **Assumptions:**
 *   Kubernetes cluster (like AKS) is available.
-*   The `migrator-runner` Docker image is pushed to a container registry accessible by the cluster (e.g., ACR or Docker Hub).
+*   The `bthdev/db-migration-runner` Docker image is available on Docker Hub (or another accessible registry).
 *   Database connection string is stored in a K8s secret named `db-credentials` with key `connectionString`.
 *   Migrations (DLLs/SQL files) are in a Git repository.
 
@@ -135,7 +135,7 @@ spec:
       containers: # Main migration container
       - name: migrator-runner
         # --- CUSTOMIZE --- 
-        image: yourregistry/migrator-runner:latest # Replace with your container image
+        image: bthdev/db-migration-runner:latest # Use the image from Docker Hub (or specific version)
         # --- END CUSTOMIZE ---
         command: ["dotnet", "Migrator.Runner.dll"]
         args:
@@ -171,7 +171,7 @@ spec:
     kubectl create secret generic db-credentials \
       --from-literal=connectionString='Your_Actual_Database_Connection_String'
     ```
-2.  **Customize YAML:** Update the placeholders (`image`, `GIT_REPO`, `GIT_BRANCH`, `REPO_MIGRATIONS_PATH`, `--type`) in the `migration-job.yaml` file.
+2.  **Customize YAML:** Update the `GIT_REPO`, `GIT_BRANCH`, `REPO_MIGRATIONS_PATH`, and `--type` in the `migration-job.yaml` file. Ensure the `image:` path is correct.
 3.  **Apply Job:**
     ```bash
     kubectl apply -f migration-job.yaml
