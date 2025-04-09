@@ -26,12 +26,12 @@ A generic database migrator tool for .NET 9, supporting MSSQL, PostgreSQL, and S
     ```
 2.  **Prepare Migrations:**
     *   Create migration classes inheriting from `FluentMigrator.Migration` in a separate class library project (like `ExampleMigrations`).
-    *   Decorate your migration classes with `[Migration(YYYYMMDDHHMMSS)]`, where the number is a 14-digit timestamp.
+    *   Decorate your C# migration classes with `[Migration(YYYYMMDDHHMM)]`, where the number is a **12-digit timestamp**. This timestamp determines the execution order relative to other migrations.
     *   Alternatively, create `.sql` script files.
     *   Build your migrations project.
     *   Create a dedicated folder (e.g., `./migrations`).
-    *   Copy the compiled migration `.dll` file into the migrations folder, renaming it to start with the exact same `YYYYMMDDHHMMSS` timestamp used in the `[Migration]` attribute (e.g., `20250409100000_MyMigrationLib.dll`).
-    *   Copy any `.sql` script files into the migrations folder, naming them with a `YYYYMMDDHHMMSS` timestamp prefix (e.g., `20250409100100_AddIndexes.sql`).
+    *   Copy the compiled migration `.dll` file(s) (containing your C# migrations) into the migrations folder. The DLL filenames themselves do not influence the execution order.
+    *   Copy any `.sql` script files into the migrations folder, naming them with a `YYYYMMDDHHMM` (12-digit) timestamp prefix (e.g., `202504091001_AddIndexes.sql`). This prefix determines their execution order relative to other migrations.
 3.  **Run the Migrator:**
     Use the `Migrator.Runner` executable:
     ```bash
