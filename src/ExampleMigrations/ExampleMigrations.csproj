@@ -19,9 +19,19 @@
     <!-- FluentMigrator is already referenced -->
   </ItemGroup>
 
+  <!-- Include SQL files from DB-specific subfolders and copy them to corresponding output subfolders -->
   <ItemGroup>
-    <Content Include="**/*.sql" Exclude="bin\\**\\*.sql;obj\\**\\*.sql">
+    <Content Include="sqlite\**\*.sql">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>sqlite\%(RecursiveDir)%(Filename)%(Extension)</Link>
+    </Content>
+    <Content Include="postgresql\**\*.sql">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>postgresql\%(RecursiveDir)%(Filename)%(Extension)</Link>
+    </Content>
+    <Content Include="sqlserver\**\*.sql">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>sqlserver\%(RecursiveDir)%(Filename)%(Extension)</Link>
     </Content>
   </ItemGroup>
 

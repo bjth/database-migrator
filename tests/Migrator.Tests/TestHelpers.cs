@@ -24,8 +24,11 @@ public static class TestHelpers
 
     public static string PrepareTestMigrations(string testId, DatabaseType dbType)
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), "MigratorTests", testId, Guid.NewGuid().ToString());
-        Directory.CreateDirectory(tempDir);
+        var tempBaseDir = Path.Combine(Path.GetTempPath(), "MigratorTests", testId, Guid.NewGuid().ToString());
+        Directory.CreateDirectory(tempBaseDir);
+        // Create a dedicated subfolder for the migrations
+        var migrationsDir = Path.Combine(tempBaseDir, "migrations");
+        Directory.CreateDirectory(migrationsDir);
 
         // --- Find ExampleMigrations project build output --- 
         var currentDir = AppContext.BaseDirectory;
@@ -79,7 +82,8 @@ public static class TestHelpers
         var dbSqlSourcePath = Path.Combine(foundBuildOutputPath, dbSpecificSubfolder);
 
         // --- Create/Copy Migration Files --- 
-        // Use AssemblyLoadContext for safe, collectible loading
+        // No longer need AssemblyLoadContext or dummy DLLs here 
+        /* 
         var alc = new AssemblyLoadContext(name: $"ExampleMigrationsContext_{testId}", isCollectible: true);
         try 
         {
@@ -116,13 +120,13 @@ public static class TestHelpers
                 alc.Unload();
             }
         }
+        */
 
-        // Copy the *actual* assembly as well, needed by MigrationService.CreateServices
-        // Use a non-conflicting name so DiscoverMigrations doesn't pick it up.
-        string actualDllDestName = "_ActualMigrations.dll"; // Or just use original name if FindActualMigrationAssembly handles it
-        File.Copy(sourceAssemblyPath, Path.Combine(tempDir, actualDllDestName), true); // Overwrite if exists
+        // Copy the *actual* assembly containing C# migrations into the migrations subfolder
+        string arbitraryDllName = "MyCustomNamedMigrations.dll"; 
+        File.Copy(sourceAssemblyPath, Path.Combine(migrationsDir, arbitraryDllName), true); // Overwrite if exists
 
-        // Copy relevant SQL migrations (from db-specific build output subfolder)
+        // Copy relevant SQL migrations (from db-specific build output subfolder) into the migrations subfolder
         if (Directory.Exists(dbSqlSourcePath))
         {
             foreach (var sourceSqlPath in Directory.EnumerateFiles(dbSqlSourcePath, "????????????_*.sql", SearchOption.TopDirectoryOnly))
@@ -130,21 +134,28 @@ public static class TestHelpers
                 var fileName = Path.GetFileName(sourceSqlPath);
                 if (SqlMigrationFileRegex.IsMatch(fileName))
                 {
-                    var destPath = Path.Combine(tempDir, fileName);
+                    var destPath = Path.Combine(migrationsDir, fileName); // Copy to migrations subfolder
                     File.Copy(sourceSqlPath, destPath);
                 }
             }
         }
         // --- End Create/Copy --- 
 
-        return tempDir;
+        // Return the path to the migrations subfolder
+        return migrationsDir;
     }
 
     public static void CleanupTestMigrations(string directoryPath)
     {
         try
         {
-             if (Directory.Exists(directoryPath))
+             // Go up one level from the migrations dir to delete the parent temp folder
+             var parentDir = Directory.GetParent(directoryPath)?.FullName;
+             if (!string.IsNullOrEmpty(parentDir) && Directory.Exists(parentDir))
+             {
+                 Directory.Delete(parentDir, true);
+             }
+             else if (Directory.Exists(directoryPath)) // Fallback if parent isn't found
              {
                  Directory.Delete(directoryPath, true);
              }

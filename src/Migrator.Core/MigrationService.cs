@@ -1,12 +1,30 @@
 using FluentMigrator.Runner;
-using FluentMigrator.Runner.Announcers;
 using FluentMigrator.Runner.Initialization;
+using FluentMigrator.Runner.VersionTableInfo;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Reflection;
 using System.Linq;
+using FluentMigrator;
+using FluentMigrator.Runner.Processors;
+using FluentMigrator.Expressions;
+using FluentMigrator.Model;
 
 namespace Migrator.Core;
+
+// Define a custom version table metadata class (Ensure this matches your actual table)
+#pragma warning disable CS0618 // Type or member is obsolete
+public class CustomVersionTableMetaData : DefaultVersionTableMetaData
+{
+    // Return null explicitly to satisfy nullable context if needed, and suppress CS8603 if it persists elsewhere
+    public override string? SchemaName => null; 
+    public override string TableName => "VersionInfo";
+    public override string ColumnName => "Version";
+    public override string AppliedOnColumnName => "AppliedOn";
+    public override string DescriptionColumnName => "Description";
+    public override string UniqueIndexName => "UC_Version";
+}
+#pragma warning restore CS0618 // Type or member is obsolete
 
 public class MigrationService(ILogger<MigrationService> logger)
 {
@@ -24,218 +42,211 @@ public class MigrationService(ILogger<MigrationService> logger)
             throw new DirectoryNotFoundException($"Migrations directory not found: {migrationsPath}");
         }
 
-        var migrationTasks = DiscoverMigrations(migrationsPath);
-        if (migrationTasks.Count == 0)
-        {
-            _logger.LogInformation("No migration tasks matching the pattern found in {Path}.", migrationsPath);
-            // Still might be a C# only migration, let the process continue
-            // return;
-        }
-        else 
-        {    
-             _logger.LogInformation("Discovered {Count} potential migration tasks based on file naming.", migrationTasks.Count);
-        }
+        // 1. Discover all potential migration tasks (SQL files) by filename
+        var migrationTasks = DiscoverSqlMigrations(migrationsPath);
+        // Log how many SQL tasks were found, but don't exit if none were found.
+        // C# migrations might still exist in assemblies.
+        _logger.LogInformation("Discovered {Count} SQL migration tasks based on file naming.", migrationTasks.Count);
 
-        // --- Find the actual assembly --- 
-        string? actualAssemblyPath = FindActualMigrationAssembly(migrationsPath);
-        if (actualAssemblyPath == null && migrationTasks.All(t => t.Type == MigrationType.Sql))
-        {
-            _logger.LogInformation("No migration assembly found, but SQL migrations were discovered. Proceeding with SQL only.");
-        }
-        else if (actualAssemblyPath == null && migrationTasks.Any(t => t.Type == MigrationType.Dll))
-        {
-             _logger.LogWarning("Found DLL migration tasks by name, but could not locate the main migration assembly in {Path}. C# migrations might not run.", migrationsPath);
-        }
-        else if (actualAssemblyPath != null)
-        {
-            _logger.LogInformation("Located main migration assembly: {AssemblyPath}", actualAssemblyPath);
-        }
-        // --- End Find --- 
+        // 2. Create service provider, scanning *only actual assemblies* for C# migrations
+        var serviceProvider = CreateServices(dbType, connectionString, migrationsPath);
 
-        // Pass the actual assembly path to CreateServices
-        var serviceProvider = CreateServices(dbType, connectionString, actualAssemblyPath); 
-
-        // Scope needed for DI resolution, especially for DbContext or similar scoped services FluentMigrator might use internally.
         using var scope = serviceProvider.CreateScope();
         var runner = scope.ServiceProvider.GetRequiredService<IMigrationRunner>();
         var versionLoader = scope.ServiceProvider.GetRequiredService<IVersionLoader>();
-        var processor = scope.ServiceProvider.GetService<FluentMigrator.IMigrationProcessor>(); // Try getting processor directly
+        var processor = scope.ServiceProvider.GetService<FluentMigrator.IMigrationProcessor>();
 
         if (processor == null && migrationTasks.Any(t => t.Type == MigrationType.Sql))
         {
-             _logger.LogError("Could not retrieve the migration processor, which is required to run raw SQL scripts.");
-             throw new InvalidOperationException("Migration processor is unavailable, cannot execute SQL scripts.");
+            _logger.LogError("Could not retrieve the migration processor, which is required to run raw SQL scripts.");
+            throw new InvalidOperationException("Migration processor is unavailable, cannot execute SQL scripts.");
         }
 
         try
         {
-            var appliedVersions = versionLoader.VersionInfo.AppliedMigrations();
-            _logger.LogInformation("Already applied versions: {Versions}", string.Join(", ", appliedVersions));
+            // Execute C# migrations first
+            _logger.LogInformation("Applying C# migrations...");
+            runner.MigrateUp();
+            _logger.LogInformation("C# migrations applied successfully.");
 
-            foreach (var task in migrationTasks.OrderBy(t => t.Timestamp))
+            // Get applied versions AFTER C# migrations
+            var appliedVersions = runner.MigrationLoader.LoadMigrations()
+                                     .Select(kvp => kvp.Key)
+                                     .ToHashSet();
+
+            _logger.LogInformation("Already applied versions (including C# migrations run just now): {Versions}", string.Join(", ", appliedVersions.OrderBy(v => v)));
+
+            // Now execute SQL migrations
+            _logger.LogInformation("Applying SQL migrations...");
+            foreach (var sqlMigration in migrationTasks.OrderBy(m => m.Timestamp))
             {
-                if (appliedVersions.Contains(task.Timestamp))
+                // Check the IVersionLoader's current list, which includes C# migrations AND
+                // any SQL migrations applied earlier in *this* loop/execution.
+                if (versionLoader.VersionInfo.HasAppliedMigration(sqlMigration.Timestamp))
                 {
-                    _logger.LogInformation("Skipping already applied migration: {Timestamp} ({Type}) - {Filename}", task.Timestamp, task.Type, task.OriginalFilename);
+                    _logger.LogInformation("Skipping already applied SQL migration: {Timestamp} - {Filename}", sqlMigration.Timestamp, sqlMigration.OriginalFilename);
                     continue;
                 }
 
-                _logger.LogInformation("Applying migration: {Timestamp} ({Type}) - {Filename}", task.Timestamp, task.Type, task.OriginalFilename);
+                _logger.LogInformation("Applying SQL migration: {Timestamp} - {Filename}", sqlMigration.Timestamp, sqlMigration.OriginalFilename);
+                string sqlScript = await File.ReadAllTextAsync(sqlMigration.FullPath);
 
-                if (task.Type == MigrationType.Dll)
+                // Execute SQL within a transaction managed by the processor
+                // NOTE: FluentMigrator processors often handle transactions implicitly or require specific methods.
+                // Assuming ProcessorBase.Execute handles this; adjust if specific transaction commands are needed.
+                try
                 {
-                    // FluentMigrator handles the transaction and version logging internally for C# migrations
-                    runner.MigrateUp(task.Timestamp);
-                    _logger.LogInformation("Successfully applied DLL migration: {Timestamp}", task.Timestamp);
+                    // Start Transaction if not automatically handled
+                    // processor.BeginTransaction(); 
+
+                    processor.Execute(sqlScript);
+
+                    // Record the SQL migration using the IVersionLoader obtained earlier
+                    // This ensures FluentMigrator knows the SQL script was applied.
+                    // The VersionLoader handles updating the version table in the database AND the in-memory list.
+                    versionLoader.UpdateVersionInfo(sqlMigration.Timestamp, $"SQL Migration: {sqlMigration.OriginalFilename}");
+
+                    // Commit Transaction if not automatically handled
+                    // processor.CommitTransaction(); 
+                     _logger.LogInformation("Successfully applied SQL script {Filename}.", sqlMigration.OriginalFilename);
                 }
-                else if (task.Type == MigrationType.Sql && processor != null)
+                catch (Exception ex)
                 {
-                    try
-                    {
-                        processor.BeginTransaction();
-                        var sqlScriptContent = await File.ReadAllTextAsync(task.FullPath);
-                        processor.Execute(sqlScriptContent);
-
-                        // Manually update version info for SQL scripts
-                        versionLoader.UpdateVersionInfo(task.Timestamp, $"Applied SQL Script: {task.OriginalFilename}");
-
-                        processor.CommitTransaction();
-                         _logger.LogInformation("Successfully applied SQL script: {Timestamp}", task.Timestamp);
-                    }
-                    catch (Exception ex)
-                    {
-                        processor?.RollbackTransaction();
-                        _logger.LogError(ex, "Failed to apply SQL script {Filename}. Transaction rolled back.", task.OriginalFilename);
-                        throw; // Re-throw to stop the migration process
-                    }
-                }
-                else
-                {
-                    // Should not happen if checks above are correct, but good to handle
-                     _logger.LogWarning("Skipping task {Timestamp} due to unknown type or missing processor.", task.Timestamp);
+                     _logger.LogError(ex, "Failed to apply SQL script {Filename}. Transaction rolling back (if processor manages transactions).", sqlMigration.OriginalFilename);
+                    // Rollback Transaction if not automatically handled
+                    // if (processor.WasCommitted) // Check if processor handles transactions and if one was active
+                    // {
+                    //      processor.RollbackTransaction();
+                    // }
+                    throw new Exception($"Failed to apply SQL script {sqlMigration.OriginalFilename}. See inner exception.", ex);
                 }
             }
+             _logger.LogInformation("SQL migrations applied successfully.");
 
-            _logger.LogInformation("Migration process completed successfully.");
+             _logger.LogInformation("Migration process completed successfully.");
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Migration process failed.");
-            // Depending on requirements, you might want to throw or handle differently
-            throw;
+            _logger.LogError(ex, "Failed during C# migration discovery or runner setup.");
+            throw; // Rethrow to indicate failure
         }
     }
 
-    private List<MigrationTask> DiscoverMigrations(string migrationsPath)
+    // Reintroduced DiscoverMigrations to find all potential task files by name
+    private List<MigrationTask> DiscoverSqlMigrations(string migrationsPath)
     {
         var tasks = new List<MigrationTask>();
-        _logger.LogDebug("Scanning directory: {Path}", migrationsPath);
+        _logger.LogDebug("Scanning directory for SQL migration files: {Path}", migrationsPath);
 
-        foreach (var file in Directory.EnumerateFiles(migrationsPath, "*.*", SearchOption.TopDirectoryOnly))
+        foreach (var file in Directory.EnumerateFiles(migrationsPath, "*.sql", SearchOption.TopDirectoryOnly))
         {
-             _logger.LogTrace("Checking file: {File}", file);
-            if (MigrationTask.TryParse(file, out var task) && task != null)
+            _logger.LogTrace("Checking potential SQL file: {File}", file);
+            // Use MigrationTask.TryParse to handle naming convention and parsing
+            if (MigrationTask.TryParse(file, out var task) && task != null && task.Type == MigrationType.Sql)
             {
-                _logger.LogDebug("Parsed migration task: {Timestamp} ({Type}) from {Filename}", task.Timestamp, task.Type, task.OriginalFilename);
+                _logger.LogDebug("Parsed SQL migration task: {Timestamp} from {Filename}", task.Timestamp, task.OriginalFilename);
                 tasks.Add(task);
             }
             else
             {
-                _logger.LogDebug("Skipping file (does not match pattern or type): {File}", file);
+                 _logger.LogDebug("Skipping file (does not match expected SQL migration pattern or failed parsing): {File}", file);
             }
         }
         return tasks;
     }
 
-    private IServiceProvider CreateServices(DatabaseType dbType, string connectionString, string? actualAssemblyPath)
+    // CreateServices now only scans *actual* assemblies, not SQL resources
+    private IServiceProvider CreateServices(DatabaseType dbType, string connectionString, string migrationsPath)
     {
+        var actualAssemblies = LoadActualAssembliesFromPath(migrationsPath).ToArray();
+
         var serviceCollection = new ServiceCollection()
+            .AddLogging(lb => lb
+               .AddConsole()
+               .AddFilter((category, level) => level >= LogLevel.Debug)
+            )
             .AddFluentMigratorCore()
             .ConfigureRunner(rb =>
             {
-                // Configure DB Provider
+                // Configure DB Provider based on dbType
                 switch (dbType)
                 {
-                    case DatabaseType.SqlServer:
-                        _logger.LogDebug("Configuring runner for SQL Server.");
-                        rb.AddSqlServer();
-                        break;
-                    case DatabaseType.PostgreSql:
-                         _logger.LogDebug("Configuring runner for PostgreSQL.");
-                        rb.AddPostgres();
-                        break;
-                    case DatabaseType.SQLite:
-                         _logger.LogDebug("Configuring runner for SQLite.");
-                         rb.AddSQLite();
-                         break;
-                    default:
-                        throw new ArgumentOutOfRangeException(nameof(dbType), $"Unsupported database type: {dbType}");
+                    case DatabaseType.SqlServer: rb.AddSqlServer(); break;
+                    case DatabaseType.PostgreSql: rb.AddPostgres(); break;
+                    case DatabaseType.SQLite: rb.AddSQLite(); break;
+                    default: throw new ArgumentOutOfRangeException(nameof(dbType));
                 }
 
+                // Set connection string
                 rb.WithGlobalConnectionString(connectionString);
 
-                // Load only the *actual* assembly, if provided
-                Assembly? migrationAssembly = null;
-                if (!string.IsNullOrEmpty(actualAssemblyPath) && File.Exists(actualAssemblyPath))
+                // Scan only the found assemblies containing IMigration implementations
+                if (actualAssemblies.Length > 0)
                 {
-                     migrationAssembly = LoadAssembly(actualAssemblyPath);
-                }
-                
-                if (migrationAssembly != null)
-                {
-                    _logger.LogDebug("Scanning assembly {AssemblyName} for migrations.", migrationAssembly.FullName);
-                    rb.ScanIn(migrationAssembly).For.Migrations();
+                    _logger.LogInformation("Scanning {Count} actual assemblies for C# migrations.", actualAssemblies.Length);
+                    foreach (var asm in actualAssemblies) { _logger.LogDebug(" - {AssemblyName}", asm.FullName); }
+                    rb.ScanIn(actualAssemblies).For.Migrations(); 
                 }
                 else
                 {
-                    _logger.LogWarning("No valid migration assembly path provided or assembly failed to load. Scanning will be empty.");
-                    // ScanIn with empty array prevents FluentMigrator from scanning the entry assembly by default
-                    rb.ScanIn([]).For.Migrations();
+                    _logger.LogWarning("No actual assemblies containing migrations found in {Path}. Only SQL scripts will be considered.", migrationsPath);
+                    rb.ScanIn([]).For.Migrations(); // Scan nothing if no assemblies found
                 }
             })
-            // Add logging services
-             .AddLogging(lb => lb
-                .AddConsole() // Keep this one simple
-                .AddFilter((category, level) => level >= LogLevel.Debug) // Set minimum level via filter
-             ); 
-             // Removed AddDebug() as it might require another package/using
-             // Removed SetMinimumLevel() as AddFilter achieves similar result
+            // Register custom version table metadata
+            .AddSingleton<IVersionTableMetaData, CustomVersionTableMetaData>();
 
+        // Build and return the service provider
         return serviceCollection.BuildServiceProvider(false);
     }
 
-     private Assembly? LoadAssembly(string assemblyPath)
+    // Load assemblies from path, excluding those named like migrations, 
+    // and verifying they actually contain IMigration types.
+    private List<Assembly> LoadActualAssembliesFromPath(string path)
     {
-        try
-        {
-            _logger.LogDebug("Loading assembly from path: {Path}", assemblyPath);
-            // Use LoadFrom context cautiously, consider AssemblyLoadContext for more isolation if needed
-            return Assembly.LoadFrom(assemblyPath);
+        var assemblies = new List<Assembly>();
+        if (!Directory.Exists(path)) { 
+            _logger.LogWarning("Migration assembly directory not found: {Path}", path);
+            return assemblies; 
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to load assembly: {Path}", assemblyPath);
-            return null; // Or re-throw depending on desired behavior
-        }
-    }
 
-    // New helper method to find the real assembly
-    private string? FindActualMigrationAssembly(string migrationsPath)
-    {
-        // Look specifically for the DLL copied by TestHelpers
-        string expectedDllName = "_ActualMigrations.dll"; 
-        var actualAssembly = Path.Combine(migrationsPath, expectedDllName);
+        var dllFiles = Directory.GetFiles(path, "*.dll");
+        _logger.LogDebug("Found {Count} DLL files in {Path}, checking which contain migrations...", dllFiles.Length, path);
 
-        if (File.Exists(actualAssembly))
+        foreach (var dllFile in dllFiles)
         {
-            return actualAssembly;
-        }
-        else
-        {
-            // Fallback for non-test scenarios? Or just rely on TestHelpers?
-            // For now, let's assume TestHelpers always provides it for tests.
-             _logger.LogTrace("Did not find expected '{DllName}' in {Path}. C# migrations might not be scanned.", expectedDllName, migrationsPath);
-             return null;
-        }
-    }
+            // Example of skipping specific framework/runtime DLLs if necessary
+            // if (Path.GetFileName(dllFile).StartsWith("System.") || Path.GetFileName(dllFile).StartsWith("Microsoft.")) continue;
+
+            try
+            {
+                _logger.LogTrace("Attempting to load potential assembly: {DllFile}", dllFile);
+                // Using LoadFrom context. Consider AssemblyLoadContext if isolation becomes a problem.
+                var assembly = Assembly.LoadFrom(dllFile);
+
+                // Check if assembly actually contains IMigration types (Interface from FluentMigrator namespace)
+                if (assembly.GetExportedTypes().Any(t => typeof(IMigration).IsAssignableFrom(t) && !t.IsAbstract && t.IsClass))
+                {
+                    assemblies.Add(assembly);
+                    _logger.LogDebug("Loaded assembly containing migrations: {AssemblyName}", assembly.FullName); // Changed to Debug level
+                }
+                else
+                {
+                    _logger.LogTrace("Assembly loaded but contains no public, non-abstract IMigration types: {AssemblyName}", assembly.FullName);
+                }
+            }
+            catch (BadImageFormatException)
+            {
+                _logger.LogDebug("Skipping file as it's not a valid .NET assembly: {DllFile}", dllFile);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to load assembly {DllFile}. It will not be scanned.", dllFile);
+            }
+        } // End foreach
+
+        _logger.LogInformation("Identified {Count} actual assemblies containing C# migrations to scan.", assemblies.Count);
+        return assemblies;
+    } // End LoadActualAssembliesFromPath
+
 } 
