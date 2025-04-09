@@ -1,5 +1,7 @@
 using CommandLine;
-using Migrator.Core; // Add this using
+using Migrator.Core;
+
+// Add this using
 
 namespace Migrator.Runner;
 
@@ -18,4 +20,4 @@ public class Options
     public bool Verbose { get; set; }
 
     // Add other options like LogLevel if needed later
-} 
+}

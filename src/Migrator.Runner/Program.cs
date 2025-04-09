@@ -1,16 +1,14 @@
 ﻿using CommandLine;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using Migrator.Core;
 using Serilog;
 using Serilog.Events;
-using System.Diagnostics;
 
 namespace Migrator.Runner;
 
-class Program
+internal class Program
 {
-    static async Task<int> Main(string[] args)
+    private static async Task<int> Main(string[] args)
     {
         // Basic Serilog configuration done after parsing args
         try
@@ -18,7 +16,7 @@ class Program
             var parserResult = Parser.Default.ParseArguments<Options>(args);
 
             await parserResult.MapResult(
-                async (Options opts) =>
+                async opts =>
                 {
                     var logLevel = opts.Verbose ? LogEventLevel.Debug : LogEventLevel.Information;
                     ConfigureSerilog(logLevel);
@@ -31,17 +29,14 @@ class Program
                 {
                     // Use logger configured above if possible, otherwise Console
                     Log.Error("Argument parsing failed:");
-                    foreach (var err in errs)
-                    {
-                         Log.Error("- {ErrorType}: {Details}", err.Tag, err.ToString());
-                    }
-                     Log.Warning("Use --help for usage information.");
+                    foreach (var err in errs) Log.Error("- {ErrorType}: {Details}", err.Tag, err.ToString());
+                    Log.Warning("Use --help for usage information.");
                     await Task.CompletedTask; // Need async lambda
                     return 1; // Failure exit code
                 });
 
             // MapResult should return the exit code, but ensure we have a return path
-             return parserResult.Tag == ParserResultType.Parsed ? 0 : 1;
+            return parserResult.Tag == ParserResultType.Parsed ? 0 : 1;
         }
         catch (Exception ex)
         {

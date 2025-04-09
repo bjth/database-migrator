@@ -1,7 +1,7 @@
 -- SQL Server: Add Value column to Settings - 202504091003
 
 ALTER TABLE [Settings]
-ADD [Value] NVARCHAR(MAX) NULL;
+    ADD [Value] NVARCHAR(MAX) NULL;
 
 GO
 

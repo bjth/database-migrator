@@ -1,34 +1,32 @@
-using DotNet.Testcontainers.Builders;
 using DotNet.Testcontainers.Containers;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Testcontainers.MsSql;
 using Testcontainers.PostgreSql;
-using Xunit.Abstractions; // Required for ITestOutputHelper
-using System;
-using Microsoft.Extensions.DependencyInjection;
+using Xunit.Abstractions;
+
+// Required for ITestOutputHelper
 
 namespace Migrator.Tests;
 
 // Base class for integration tests requiring a database container
 public abstract class IntegrationTestBase : IAsyncLifetime, IDisposable
 {
-    protected readonly ITestOutputHelper _outputHelper;
-    protected readonly ILoggerFactory _loggerFactory;
     private readonly ServiceProvider _serviceProvider; // Own service provider for logging
-    
-    // Database specific containers - inheriting classes must initialize ONE of these
-    protected DockerContainer? _dbContainer = null;
-    protected string? _connectionString = null;
+    protected readonly ILoggerFactory LoggerFactory;
+    protected readonly ITestOutputHelper OutputHelper;
 
-    protected abstract TestcontainerDatabase ContainerDatabase { get; }
+    // Database specific containers - inheriting classes must initialize ONE of these
+    private DockerContainer? _dbContainer;
+    protected string? ConnectionString;
 
     protected IntegrationTestBase(ITestOutputHelper outputHelper)
     {
         ArgumentNullException.ThrowIfNull(outputHelper);
-        _outputHelper = outputHelper;
+        OutputHelper = outputHelper;
 
         // Setup logging directed to xUnit output
-        _loggerFactory = Microsoft.Extensions.Logging.LoggerFactory.Create(builder =>
+        LoggerFactory = Microsoft.Extensions.Logging.LoggerFactory.Create(builder =>
         {
             builder
                 .AddXUnit(outputHelper) // Add xUnit logger provider
@@ -36,16 +34,21 @@ public abstract class IntegrationTestBase : IAsyncLifetime, IDisposable
         });
 
         _serviceProvider = new ServiceCollection()
-            .AddSingleton<ILoggerFactory>(_loggerFactory)
+            .AddSingleton(LoggerFactory)
             .BuildServiceProvider();
     }
+
+    protected abstract TestcontainerDatabase ContainerDatabase { get; }
 
     public async Task InitializeAsync()
     {
         _dbContainer = BuildContainer();
         await _dbContainer.StartAsync();
         // Optional: Add a small delay or readiness check if needed after start
-        _connectionString = _dbContainer.State == TestcontainersStates.Running ? GetConnectionString(_dbContainer) : null;
+        ConnectionString = _dbContainer.State == TestcontainersStates.Running
+            ? GetConnectionString(_dbContainer)
+            : null;
+        Assert.NotNull(ConnectionString);
     }
 
     public async Task DisposeAsync()
@@ -55,12 +58,19 @@ public abstract class IntegrationTestBase : IAsyncLifetime, IDisposable
             await _dbContainer.StopAsync();
             await _dbContainer.DisposeAsync();
         }
-        _loggerFactory.Dispose();
+
+        LoggerFactory.Dispose();
+    }
+
+    public void Dispose()
+    {
+        Dispose(true);
+        GC.SuppressFinalize(this);
     }
 
     private DockerContainer BuildContainer()
     {
-        var logger = _loggerFactory.CreateLogger("Testcontainers");
+        var logger = LoggerFactory.CreateLogger("Testcontainers");
 
         switch (ContainerDatabase)
         {
@@ -81,38 +91,30 @@ public abstract class IntegrationTestBase : IAsyncLifetime, IDisposable
                     .WithPortBinding(5432, true) // Assign random host port
                     .Build();
             default:
-                throw new ArgumentOutOfRangeException(nameof(ContainerDatabase), "Unsupported database type for testing.");
+                throw new ArgumentOutOfRangeException(nameof(ContainerDatabase),
+                    "Unsupported database type for testing.");
         }
     }
 
     private string GetConnectionString(DockerContainer container)
     {
-        switch (container)
+        return container switch
         {
-            case MsSqlContainer msSql: return msSql.GetConnectionString();
-            case PostgreSqlContainer postgreSql: return postgreSql.GetConnectionString();
-            default: throw new InvalidOperationException("Cannot get connection string for unknown container type.");
-        }
+            MsSqlContainer msSql => msSql.GetConnectionString(),
+            PostgreSqlContainer postgreSql => postgreSql.GetConnectionString(),
+            _ => throw new InvalidOperationException("Cannot get connection string for unknown container type.")
+        };
+    }
+
+    protected virtual void Dispose(bool disposing)
+    {
+        if (disposing) _serviceProvider.Dispose();
     }
 
     protected enum TestcontainerDatabase
     {
         MsSql,
         PostgreSql
-    }
-
-    public void Dispose()
-    {
-        Dispose(true);
-        GC.SuppressFinalize(this);
-    }
-
-    protected virtual void Dispose(bool disposing)
-    {
-        if (disposing)
-        {
-            _serviceProvider.Dispose();
-        }
     }
 }
 
@@ -129,11 +131,9 @@ public static class XUnitLoggerExtensions
 // Custom Logger Provider for xUnit
 public class XUnitLoggerProvider(ITestOutputHelper outputHelper) : ILoggerProvider
 {
-    private readonly ITestOutputHelper _outputHelper = outputHelper;
-
-    public Microsoft.Extensions.Logging.ILogger CreateLogger(string categoryName)
+    public ILogger CreateLogger(string categoryName)
     {
-        return new XUnitLogger(_outputHelper, categoryName);
+        return new XUnitLogger(outputHelper, categoryName);
     }
 
     public void Dispose()
@@ -143,28 +143,32 @@ public class XUnitLoggerProvider(ITestOutputHelper outputHelper) : ILoggerProvid
 }
 
 // Custom Logger for xUnit
-public class XUnitLogger(ITestOutputHelper outputHelper, string categoryName) : Microsoft.Extensions.Logging.ILogger
+public class XUnitLogger(ITestOutputHelper outputHelper, string categoryName) : ILogger
 {
-    private readonly ITestOutputHelper _outputHelper = outputHelper;
-    private readonly string _categoryName = categoryName;
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull
+    {
+        return null;
+        // Scopes not easily represented
+    }
 
-    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null; // Scopes not easily represented
+    public bool IsEnabled(LogLevel logLevel)
+    {
+        return true;
+        // Log everything
+    }
 
-    public bool IsEnabled(LogLevel logLevel) => true; // Log everything
-
-    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+        Func<TState, Exception?, string> formatter)
     {
         try
         {
-            _outputHelper.WriteLine($"[{DateTime.Now:HH:mm:ss} {logLevel.ToString().ToUpperInvariant().Substring(0, 3)}] {_categoryName}: {formatter(state, exception)}");
-            if (exception != null)
-            {
-                _outputHelper.WriteLine(exception.ToString());
-            }
+            outputHelper.WriteLine(
+                $"[{DateTime.Now:HH:mm:ss} {logLevel.ToString().ToUpperInvariant().Substring(0, 3)}] {categoryName}: {formatter(state, exception)}");
+            if (exception != null) outputHelper.WriteLine(exception.ToString());
         }
         catch (Exception ex) // Avoid exceptions from logging stopping tests
         {
             Console.WriteLine($"Error writing log message: {ex}");
         }
     }
-} 
+}

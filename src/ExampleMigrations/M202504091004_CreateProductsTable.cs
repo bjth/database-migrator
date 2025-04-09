@@ -20,4 +20,4 @@ namespace ExampleMigrations
             Delete.Table("Products");
         }
     }
-} 
+}

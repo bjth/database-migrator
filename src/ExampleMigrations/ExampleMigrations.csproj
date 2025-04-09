@@ -1,38 +1,38 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-  <PropertyGroup>
-    <TargetFrameworks>net9.0;netstandard2.0</TargetFrameworks>
-    <ImplicitUsings Condition=" '$(TargetFramework)' != 'netstandard2.0' ">enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-    <LangVersion Condition=" '$(TargetFramework)' == 'netstandard2.0' ">8.0</LangVersion>
-    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
-    <AssemblyName>ExampleMigrations</AssemblyName>
-  </PropertyGroup>
+    <PropertyGroup>
+        <TargetFrameworks>net9.0;netstandard2.0</TargetFrameworks>
+        <ImplicitUsings Condition=" '$(TargetFramework)' != 'netstandard2.0' ">enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <LangVersion Condition=" '$(TargetFramework)' == 'netstandard2.0' ">8.0</LangVersion>
+        <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+        <AssemblyName>ExampleMigrations</AssemblyName>
+    </PropertyGroup>
 
-  <ItemGroup>
-    <PackageReference Include="FluentMigrator" Version="7.1.0" />
-  </ItemGroup>
+    <ItemGroup>
+        <PackageReference Include="FluentMigrator" Version="7.1.0"/>
+    </ItemGroup>
 
-  <ItemGroup Condition=" '$(TargetFramework)' == 'netstandard2.0' ">
-    <!-- Add common system usings if needed by your migrations -->
-    <!-- Example: <Using Include="System" /> -->
-    <!-- FluentMigrator is already referenced -->
-  </ItemGroup>
+    <ItemGroup Condition=" '$(TargetFramework)' == 'netstandard2.0' ">
+        <!-- Add common system usings if needed by your migrations -->
+        <!-- Example: <Using Include="System" /> -->
+        <!-- FluentMigrator is already referenced -->
+    </ItemGroup>
 
-  <!-- Include SQL files from DB-specific subfolders and copy them to corresponding output subfolders -->
-  <ItemGroup>
-    <Content Include="sqlite\**\*.sql">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <Link>sqlite\%(RecursiveDir)%(Filename)%(Extension)</Link>
-    </Content>
-    <Content Include="postgresql\**\*.sql">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <Link>postgresql\%(RecursiveDir)%(Filename)%(Extension)</Link>
-    </Content>
-    <Content Include="sqlserver\**\*.sql">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <Link>sqlserver\%(RecursiveDir)%(Filename)%(Extension)</Link>
-    </Content>
-  </ItemGroup>
+    <!-- Include SQL files from DB-specific subfolders and copy them to corresponding output subfolders -->
+    <ItemGroup>
+        <Content Include="sqlite\**\*.sql">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <Link>sqlite\%(RecursiveDir)%(Filename)%(Extension)</Link>
+        </Content>
+        <Content Include="postgresql\**\*.sql">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <Link>postgresql\%(RecursiveDir)%(Filename)%(Extension)</Link>
+        </Content>
+        <Content Include="sqlserver\**\*.sql">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <Link>sqlserver\%(RecursiveDir)%(Filename)%(Extension)</Link>
+        </Content>
+    </ItemGroup>
 
 </Project>

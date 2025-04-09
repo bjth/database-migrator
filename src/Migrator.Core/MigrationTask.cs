@@ -14,8 +14,8 @@ public enum DatabaseType
 public enum MigrationType
 {
     Unknown = 0, // Keep unknown for default/error cases
-    Dll,         // Might be useful if we parse DLL names later
-    Sql          // Used for SQL files
+    Dll, // Might be useful if we parse DLL names later
+    Sql // Used for SQL files
 }
 
 public record MigrationTask
@@ -30,28 +30,18 @@ public record MigrationTask
         task = null;
         var fileName = Path.GetFileName(filePath);
         if (string.IsNullOrEmpty(fileName) || fileName.Length < 14) // YYYYMMDDHHMM_ + at least one char + .ext
-        {
             return false;
-        }
 
-        if (!long.TryParse(fileName.AsSpan(0, 12), NumberStyles.None, CultureInfo.InvariantCulture, out var timestamp))
-        {
-            return false;
-        }
+        if (!long.TryParse(fileName.AsSpan(0, 12), NumberStyles.None, CultureInfo.InvariantCulture,
+                out var timestamp)) return false;
 
         MigrationType type;
         if (fileName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
-        {
             type = MigrationType.Dll;
-        }
         else if (fileName.EndsWith(".sql", StringComparison.OrdinalIgnoreCase))
-        {
             type = MigrationType.Sql;
-        }
         else
-        {
             return false; // Unsupported file type
-        }
 
         task = new MigrationTask
         {
@@ -69,10 +59,11 @@ public record MigrationTask
         var fileName = Path.GetFileName(filePath);
         // Use the same logic as TryParse for consistency
         if (string.IsNullOrEmpty(fileName) || fileName.Length < 14) return false;
-        if (!long.TryParse(fileName.AsSpan(0, 12), NumberStyles.None, CultureInfo.InvariantCulture, out _)) return false;
-        if (!fileName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && 
+        if (!long.TryParse(fileName.AsSpan(0, 12), NumberStyles.None, CultureInfo.InvariantCulture, out _))
+            return false;
+        if (!fileName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) &&
             !fileName.EndsWith(".sql", StringComparison.OrdinalIgnoreCase)) return false;
-        
+
         return true;
     }
-} 
+}

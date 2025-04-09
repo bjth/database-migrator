@@ -21,4 +21,4 @@ namespace ExampleMigrations
             Delete.Table("Users");
         }
     }
-} 
+}
