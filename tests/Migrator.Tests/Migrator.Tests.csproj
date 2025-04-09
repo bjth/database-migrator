@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net9.0</TargetFramework>
@@ -16,7 +16,7 @@
     <PackageReference Include="FluentMigrator.Runner" Version="7.1.0" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="6.0.1" />
     <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="9.0.4" />
-    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.8" />
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.11" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.10.0" />
     <PackageReference Include="Npgsql" Version="9.0.3" />
     <PackageReference Include="Shouldly" Version="4.2.1" />
