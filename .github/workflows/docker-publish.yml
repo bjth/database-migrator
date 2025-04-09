@@ -52,7 +52,7 @@ jobs:
       uses: docker/build-push-action@v5
       with:
         context: . # Context must be repo root
-        file: ${{ github.workspace }}/src/Migrator.Runner/Dockerfile # Use absolute path in runner
+        file: ./src/Migrator.Runner/Dockerfile # Path relative to context
         push: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
