@@ -50,6 +50,7 @@ public class MigrationService(ILogger<MigrationService> logger)
         // 2. Create service provider, scanning assemblies for C# migrations
         // Ensure WithoutGlobalTransaction is NOT called here if it causes issues or is unavailable.
         var serviceProvider = CreateServices(dbType, connectionString, migrationsPath);
+        ArgumentNullException.ThrowIfNull(serviceProvider, nameof(serviceProvider));
 
         using var scope = serviceProvider.CreateScope();
         var runner = scope.ServiceProvider.GetRequiredService<IMigrationRunner>();

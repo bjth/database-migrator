@@ -4,63 +4,75 @@ using Microsoft.Extensions.Logging;
 using Testcontainers.MsSql;
 using Testcontainers.PostgreSql;
 using Xunit.Abstractions; // Required for ITestOutputHelper
+using System;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Migrator.Tests;
 
 // Base class for integration tests requiring a database container
-public abstract class IntegrationTestBase : IAsyncLifetime
+public abstract class IntegrationTestBase : IAsyncLifetime, IDisposable
 {
-    protected readonly ITestOutputHelper OutputHelper;
-    protected readonly ILoggerFactory LoggerFactory;
-    protected IContainer? Container { get; private set; }
-    protected string ConnectionString => Container?.State == TestcontainersStates.Running ? GetConnectionString(Container) : string.Empty;
+    protected readonly ITestOutputHelper _outputHelper;
+    protected readonly ILoggerFactory _loggerFactory;
+    private readonly ServiceProvider _serviceProvider; // Own service provider for logging
+    
+    // Database specific containers - inheriting classes must initialize ONE of these
+    protected DockerContainer? _dbContainer = null;
+    protected string? _connectionString = null;
 
     protected abstract TestcontainerDatabase ContainerDatabase { get; }
 
     protected IntegrationTestBase(ITestOutputHelper outputHelper)
     {
-        OutputHelper = outputHelper;
-        // Create a logger factory that directs output to xUnit's output helper
-        LoggerFactory = Microsoft.Extensions.Logging.LoggerFactory.Create(builder =>
+        ArgumentNullException.ThrowIfNull(outputHelper);
+        _outputHelper = outputHelper;
+
+        // Setup logging directed to xUnit output
+        _loggerFactory = Microsoft.Extensions.Logging.LoggerFactory.Create(builder =>
         {
             builder
                 .AddXUnit(outputHelper) // Add xUnit logger provider
                 .SetMinimumLevel(LogLevel.Trace); // Adjust log level as needed
         });
+
+        _serviceProvider = new ServiceCollection()
+            .AddSingleton<ILoggerFactory>(_loggerFactory)
+            .BuildServiceProvider();
     }
 
     public async Task InitializeAsync()
     {
-        Container = BuildContainer();
-        await Container.StartAsync();
+        _dbContainer = BuildContainer();
+        await _dbContainer.StartAsync();
         // Optional: Add a small delay or readiness check if needed after start
+        _connectionString = _dbContainer.State == TestcontainersStates.Running ? GetConnectionString(_dbContainer) : null;
     }
 
     public async Task DisposeAsync()
     {
-        if (Container != null)
+        if (_dbContainer != null)
         {
-            await Container.StopAsync();
-            await Container.DisposeAsync();
+            await _dbContainer.StopAsync();
+            await _dbContainer.DisposeAsync();
         }
-         LoggerFactory.Dispose();
+        _loggerFactory.Dispose();
     }
 
-    private IContainer BuildContainer()
+    private DockerContainer BuildContainer()
     {
-         var logger = LoggerFactory.CreateLogger("Testcontainers");
+        var logger = _loggerFactory.CreateLogger("Testcontainers");
 
         switch (ContainerDatabase)
         {
             case TestcontainerDatabase.MsSql:
-                 logger.LogInformation("Building MsSql Testcontainer...");
+                logger.LogInformation("Building MsSql Testcontainer...");
                 return new MsSqlBuilder()
                     .WithImage("mcr.microsoft.com/mssql/server:latest") // Specify image if needed
                     .WithPassword("yourStrong(!)Password") // Use a strong password
                     .WithPortBinding(1433, true) // Assign random host port
                     .Build();
             case TestcontainerDatabase.PostgreSql:
-                 logger.LogInformation("Building PostgreSql Testcontainer...");
+                logger.LogInformation("Building PostgreSql Testcontainer...");
                 return new PostgreSqlBuilder()
                     .WithImage("postgres:latest") // Specify image if needed
                     .WithDatabase("test_db")
@@ -73,7 +85,7 @@ public abstract class IntegrationTestBase : IAsyncLifetime
         }
     }
 
-    private string GetConnectionString(IContainer container)
+    private string GetConnectionString(DockerContainer container)
     {
         switch (container)
         {
@@ -87,6 +99,20 @@ public abstract class IntegrationTestBase : IAsyncLifetime
     {
         MsSql,
         PostgreSql
+    }
+
+    public void Dispose()
+    {
+        Dispose(true);
+        GC.SuppressFinalize(this);
+    }
+
+    protected virtual void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _serviceProvider.Dispose();
+        }
     }
 }
 
@@ -112,7 +138,7 @@ public class XUnitLoggerProvider(ITestOutputHelper outputHelper) : ILoggerProvid
 
     public void Dispose()
     {
-         GC.SuppressFinalize(this);
+        GC.SuppressFinalize(this);
     }
 }
 
@@ -138,7 +164,7 @@ public class XUnitLogger(ITestOutputHelper outputHelper, string categoryName) : 
         }
         catch (Exception ex) // Avoid exceptions from logging stopping tests
         {
-             Console.WriteLine($"Error writing log message: {ex}");
+            Console.WriteLine($"Error writing log message: {ex}");
         }
     }
 } 

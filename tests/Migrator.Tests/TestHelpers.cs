@@ -147,6 +147,7 @@ public static class TestHelpers
 
     public static void CleanupTestMigrations(string directoryPath)
     {
+        ArgumentException.ThrowIfNullOrEmpty(directoryPath);
         try
         {
              // Go up one level from the migrations dir to delete the parent temp folder
@@ -174,6 +175,7 @@ public static class TestHelpers
     public static async Task AssertDatabaseStateAfterMigrations(DatabaseType dbType, string connectionString, int expectedMigrationCount = 6)
     {
         var versionCheckServiceProvider = BuildVersionCheckServiceProvider(dbType, connectionString);
+        ArgumentNullException.ThrowIfNull(versionCheckServiceProvider);
         using var scope = versionCheckServiceProvider.CreateScope();
         var versionLoader = scope.ServiceProvider.GetRequiredService<IVersionLoader>();
 
@@ -293,8 +295,9 @@ public static class TestHelpers
 
     private static async Task<bool> CheckTableExistsAsync(DbConnection connection, string tableName)
     {
-        // Using original case tableName parameter for lookups
+        ArgumentNullException.ThrowIfNull(connection);
         await using var command = connection.CreateCommand();
+        ArgumentNullException.ThrowIfNull(command, nameof(command)); // Check command
         if (connection is SqliteConnection)
         {
             command.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=@TableName";
@@ -316,8 +319,9 @@ public static class TestHelpers
 
     private static async Task<bool> CheckColumnExistsAsync(DbConnection connection, string tableName, string columnName)
     {
-        // Using original case tableName and columnName parameters for lookups
+        ArgumentNullException.ThrowIfNull(connection);
         await using var command = connection.CreateCommand();
+        ArgumentNullException.ThrowIfNull(command, nameof(command)); // Check command
          if (connection is SqliteConnection)
          {
             command.CommandText = $"SELECT COUNT(*) FROM pragma_table_info(@TableName) WHERE name=@ColumnName";
@@ -342,7 +346,9 @@ public static class TestHelpers
 
     private static DbParameter CreateParameter(DbCommand command, string name, object value)
     {
+        ArgumentNullException.ThrowIfNull(command);
         var parameter = command.CreateParameter();
+        ArgumentNullException.ThrowIfNull(parameter, nameof(parameter)); // Check parameter
         parameter.ParameterName = name;
         parameter.Value = value ?? DBNull.Value;
         return parameter;

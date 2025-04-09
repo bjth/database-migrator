@@ -77,9 +77,15 @@ class Program
         services.AddSingleton<MigrationService>();
 
         var serviceProvider = services.BuildServiceProvider();
+        ArgumentNullException.ThrowIfNull(serviceProvider, nameof(serviceProvider));
 
+        // Resolve MigrationService
         var migrationService = serviceProvider.GetRequiredService<MigrationService>();
+        ArgumentNullException.ThrowIfNull(migrationService, nameof(migrationService));
 
+        // Execute migrations asynchronously
         await migrationService.ExecuteMigrationsAsync(opts.DatabaseType, opts.ConnectionString, opts.MigrationsPath);
+
+        Log.Information("Migration process completed successfully.");
     }
 }
