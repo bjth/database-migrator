@@ -20,10 +20,10 @@ public enum MigrationType
 
 public record MigrationTask
 {
-    public long Timestamp { get; init; }
-    public MigrationType Type { get; init; }
-    public string FullPath { get; init; } = string.Empty;
-    public string OriginalFilename { get; init; } = string.Empty;
+    public long Timestamp { get; private init; }
+    public MigrationType Type { get; private init; }
+    public string FullPath { get; private init; } = string.Empty;
+    public string OriginalFilename { get; private init; } = string.Empty;
 
     public static bool TryParse(string filePath, out MigrationTask? task)
     {
@@ -31,7 +31,6 @@ public record MigrationTask
         var fileName = Path.GetFileName(filePath);
         if (string.IsNullOrEmpty(fileName) || fileName.Length < 14) // YYYYMMDDHHMM_ + at least one char + .ext
             return false;
-
         if (!long.TryParse(fileName.AsSpan(0, 12), NumberStyles.None, CultureInfo.InvariantCulture,
                 out var timestamp)) return false;
 
@@ -50,20 +49,6 @@ public record MigrationTask
             FullPath = Path.GetFullPath(filePath), // Store the full path
             OriginalFilename = fileName
         };
-        return true;
-    }
-
-    // Helper to check if a filename matches the expected timestamped pattern
-    public static bool IsTimestampedMigrationFile(string filePath)
-    {
-        var fileName = Path.GetFileName(filePath);
-        // Use the same logic as TryParse for consistency
-        if (string.IsNullOrEmpty(fileName) || fileName.Length < 14) return false;
-        if (!long.TryParse(fileName.AsSpan(0, 12), NumberStyles.None, CultureInfo.InvariantCulture, out _))
-            return false;
-        if (!fileName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) &&
-            !fileName.EndsWith(".sql", StringComparison.OrdinalIgnoreCase)) return false;
-
         return true;
     }
 }
