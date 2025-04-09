@@ -1,5 +1,6 @@
 # Migrator
 
+[![Codacy Badge](https://app.codacy.com/project/badge/Grade/2a1f8ce4fec44dbf8b3791b6cde7947c)](https://app.codacy.com/gh/bjth/database-migrator/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
 [![Docker Publish Workflow](https://github.com/bjth/database-migrator/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/bjth/database-migrator/actions/workflows/docker-publish.yml)
 [![License: MIT](https://img.shields.io/github/license/bjth/database-migrator)](LICENSE)
 [![Latest Tag](https://img.shields.io/github/v/tag/bjth/database-migrator?sort=semver&label=latest)](https://github.com/bjth/database-migrator/tags)
