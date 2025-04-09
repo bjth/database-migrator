@@ -1,5 +1,9 @@
 # Migrator
 
+[![Docker Publish Workflow](https://github.com/bjth/database-migrator/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/bjth/database-migrator/actions/workflows/docker-publish.yml)
+[![License: MIT](https://img.shields.io/github/license/bjth/database-migrator)](LICENSE)
+[![Latest Tag](https://img.shields.io/github/v/tag/bjth/database-migrator?sort=semver&label=latest)](https://github.com/bjth/database-migrator/tags)
+
 A generic database migrator tool for .NET 9, supporting MSSQL, PostgreSQL, and SQLite.
 
 ## Goals
