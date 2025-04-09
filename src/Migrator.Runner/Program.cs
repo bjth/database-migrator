@@ -27,7 +27,6 @@ internal class Program
                 },
                 async errs =>
                 {
-                    // Use logger configured above if possible, otherwise Console
                     Log.Error("Argument parsing failed:");
                     foreach (var err in errs) Log.Error("- {ErrorType}: {Details}", err.Tag, err.ToString());
                     Log.Warning("Use --help for usage information.");
@@ -35,7 +34,7 @@ internal class Program
                     return 1; // Failure exit code
                 });
 
-            // MapResult should return the exit code, but ensure we have a return path
+            // Ensure we have a return path
             return parserResult.Tag == ParserResultType.Parsed ? 0 : 1;
         }
         catch (Exception ex)
@@ -65,20 +64,15 @@ internal class Program
     {
         var services = new ServiceCollection();
 
-        // Configure Logging
         services.AddLogging(configure => configure.AddSerilog());
-
-        // Add our Migration Service
         services.AddSingleton<MigrationService>();
 
         var serviceProvider = services.BuildServiceProvider();
         ArgumentNullException.ThrowIfNull(serviceProvider, nameof(serviceProvider));
 
-        // Resolve MigrationService
         var migrationService = serviceProvider.GetRequiredService<MigrationService>();
         ArgumentNullException.ThrowIfNull(migrationService, nameof(migrationService));
 
-        // Execute migrations asynchronously
         await migrationService.ExecuteMigrationsAsync(opts.DatabaseType, opts.ConnectionString, opts.MigrationsPath);
 
         Log.Information("Migration process completed successfully.");

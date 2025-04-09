@@ -14,8 +14,8 @@ public enum DatabaseType
 public enum MigrationType
 {
     Unknown = 0, // Keep unknown for default/error cases
-    Dll, // Might be useful if we parse DLL names later
-    Sql // Used for SQL files
+    Dll,
+    Sql
 }
 
 public record MigrationTask
@@ -29,7 +29,7 @@ public record MigrationTask
     {
         task = null;
         var fileName = Path.GetFileName(filePath);
-        if (string.IsNullOrEmpty(fileName) || fileName.Length < 14) // YYYYMMDDHHMM_ + at least one char + .ext
+        if (string.IsNullOrEmpty(fileName) || fileName.Length < 14) // Basic length check
             return false;
         if (!long.TryParse(fileName.AsSpan(0, 12), NumberStyles.None, CultureInfo.InvariantCulture,
                 out var timestamp)) return false;
@@ -46,7 +46,7 @@ public record MigrationTask
         {
             Timestamp = timestamp,
             Type = type,
-            FullPath = Path.GetFullPath(filePath), // Store the full path
+            FullPath = Path.GetFullPath(filePath),
             OriginalFilename = fileName
         };
         return true;

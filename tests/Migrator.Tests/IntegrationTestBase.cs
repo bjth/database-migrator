@@ -25,12 +25,12 @@ public abstract class IntegrationTestBase : IAsyncLifetime, IDisposable
         ArgumentNullException.ThrowIfNull(outputHelper);
         OutputHelper = outputHelper;
 
-        // Setup logging directed to xUnit output
+        // Setup logging
         LoggerFactory = Microsoft.Extensions.Logging.LoggerFactory.Create(builder =>
         {
             builder
-                .AddXUnit(outputHelper) // Add xUnit logger provider
-                .SetMinimumLevel(LogLevel.Trace); // Adjust log level as needed
+                .AddXUnit(outputHelper)
+                .SetMinimumLevel(LogLevel.Trace);
         });
 
         _serviceProvider = new ServiceCollection()
@@ -77,18 +77,18 @@ public abstract class IntegrationTestBase : IAsyncLifetime, IDisposable
             case TestcontainerDatabase.MsSql:
                 logger.LogInformation("Building MsSql Testcontainer...");
                 return new MsSqlBuilder()
-                    .WithImage("mcr.microsoft.com/mssql/server:latest") // Specify image if needed
-                    .WithPassword("yourStrong(!)Password") // Use a strong password
-                    .WithPortBinding(1433, true) // Assign random host port
+                    .WithImage("mcr.microsoft.com/mssql/server:latest")
+                    .WithPassword("yourStrong(!)Password")
+                    .WithPortBinding(1433, true)
                     .Build();
             case TestcontainerDatabase.PostgreSql:
                 logger.LogInformation("Building PostgreSql Testcontainer...");
                 return new PostgreSqlBuilder()
-                    .WithImage("postgres:latest") // Specify image if needed
+                    .WithImage("postgres:latest")
                     .WithDatabase("test_db")
                     .WithUsername("test_user")
                     .WithPassword("test_password")
-                    .WithPortBinding(5432, true) // Assign random host port
+                    .WithPortBinding(5432, true)
                     .Build();
             default:
                 throw new ArgumentOutOfRangeException(nameof(ContainerDatabase),

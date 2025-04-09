@@ -4,7 +4,7 @@ using Migrator.Core;
 using Shouldly;
 using SQLitePCL;
 using Xunit.Abstractions;
-using ILoggerFactory = Microsoft.Extensions.Logging.ILoggerFactory; // Add this using statement
+using ILoggerFactory = Microsoft.Extensions.Logging.ILoggerFactory;
 
 namespace Migrator.Tests;
 
@@ -14,21 +14,20 @@ public class SqliteMigrationTests : IDisposable
     private readonly string _dbFilePath;
     private readonly string _connectionString;
     private readonly ILoggerFactory _loggerFactory;
-    private readonly ServiceProvider _serviceProvider; // For logging
+    private readonly ServiceProvider _serviceProvider;
 
     public SqliteMigrationTests(ITestOutputHelper outputHelper)
     {
-        // Initialize SQLitePCL provider - Add this line
+        // Initialize SQLitePCL provider
         raw.SetProvider(new SQLite3Provider_e_sqlite3());
 
         _dbFilePath = Path.Combine(Path.GetTempPath(), $"migrator_sqlite_test_{Guid.NewGuid()}.db");
         _connectionString = $"Data Source={_dbFilePath}";
 
-        // Setup logging directed to xUnit output
         _loggerFactory = LoggerFactory.Create(builder =>
         {
             builder
-                .AddXUnit(outputHelper) // Reuse the extension method from IntegrationTestBase file
+                .AddXUnit(outputHelper)
                 .SetMinimumLevel(LogLevel.Trace);
         });
 
@@ -42,7 +41,6 @@ public class SqliteMigrationTests : IDisposable
     {
         _serviceProvider.Dispose();
         _loggerFactory.Dispose();
-        // Attempt to delete the temp DB file
         try
         {
             File.Delete(_dbFilePath);
@@ -63,16 +61,13 @@ public class SqliteMigrationTests : IDisposable
         var logger = _loggerFactory.CreateLogger<MigrationService>();
         var migrationService = new MigrationService(logger);
 
-        // Act & Assert
         await Should.NotThrowAsync(async () =>
         {
             await migrationService.ExecuteMigrationsAsync(DatabaseType.SQLite, _connectionString, migrationsDir);
         });
 
-        // Assert: Check database state
         await TestHelpers.AssertDatabaseStateAfterMigrations(DatabaseType.SQLite, _connectionString);
 
-        // Cleanup
         TestHelpers.CleanupTestMigrations(migrationsDir);
     }
 
@@ -85,22 +80,19 @@ public class SqliteMigrationTests : IDisposable
         var logger = _loggerFactory.CreateLogger<MigrationService>();
         var migrationService = new MigrationService(logger);
 
-        // Act 1: Run migrations first time
+        // Run migrations first time
         await migrationService.ExecuteMigrationsAsync(DatabaseType.SQLite, _connectionString, migrationsDir);
 
-        // Assert 1: Check initial state
         await TestHelpers.AssertDatabaseStateAfterMigrations(DatabaseType.SQLite, _connectionString);
 
-        // Act 2: Run migrations second time
+        // Run migrations second time
         await Should.NotThrowAsync(async () =>
         {
             await migrationService.ExecuteMigrationsAsync(DatabaseType.SQLite, _connectionString, migrationsDir);
         });
 
-        // Assert 2: State should remain unchanged
         await TestHelpers.AssertDatabaseStateAfterMigrations(DatabaseType.SQLite, _connectionString);
         
-        // Cleanup
         TestHelpers.CleanupTestMigrations(migrationsDir);
     }
 
@@ -109,26 +101,20 @@ public class SqliteMigrationTests : IDisposable
     {
         // Arrange
         const string testId = "sqlite_interleaved";
-        // Pass the database type to the helper
         var migrationsDir = TestHelpers.PrepareInterleavedMigrations(testId);
         var logger = _loggerFactory.CreateLogger<MigrationService>();
         var migrationService = new MigrationService(logger);
 
-        // Act
         await Should.NotThrowAsync(async () =>
         {
             await migrationService.ExecuteMigrationsAsync(DatabaseType.SQLite, _connectionString, migrationsDir);
         });
 
-        // Assert
-        // This helper will need to check the specific state resulting from the interleaved migrations
         await TestHelpers.AssertDatabaseStateAfterInterleavedMigrations(DatabaseType.SQLite, _connectionString);
-        // This helper will need to verify the VersionInfo table entries and order
         await TestHelpers.AssertVersionInfoOrder(DatabaseType.SQLite, _connectionString,
             TestHelpers.GetExpectedInterleavedVersions());
 
-        // Cleanup
-        TestHelpers.CleanupTestMigrations(migrationsDir); // Can reuse cleanup
+        TestHelpers.CleanupTestMigrations(migrationsDir);
     }
 
     [Fact]
@@ -150,13 +136,11 @@ public class SqliteMigrationTests : IDisposable
         var logFilePath = Path.Combine(Directory.GetCurrentDirectory(), "logs", "migration-error.log");
         if (File.Exists(logFilePath)) File.Delete(logFilePath); // Clear log before test
 
-        // Act
         var exception = await Should.ThrowAsync<Exception>(async () =>
         {
             await migrationService.ExecuteMigrationsAsync(DatabaseType.SQLite, _connectionString, migrationsDir);
         });
 
-        // Assert Exception
         exception.ShouldNotBeNull();
         exception.Message.ShouldContain($"CRITICAL ERROR applying SQL migration {faultyMigrationVersion}");
         exception.Message.ShouldContain("Halting execution");
@@ -179,7 +163,6 @@ public class SqliteMigrationTests : IDisposable
         logContent.ShouldContain("Migration process stopped.");
         logContent.ShouldContain("Underlying Exception:"); // Check for the original exception details
 
-        // Cleanup
         TestHelpers.CleanupTestMigrations(migrationsDir);
         if (File.Exists(logFilePath)) File.Delete(logFilePath); // Clean up log file
     }

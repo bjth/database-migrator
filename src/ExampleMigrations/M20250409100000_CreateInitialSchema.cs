@@ -2,7 +2,6 @@ using FluentMigrator;
 
 namespace ExampleMigrations
 {
-    // Timestamp uses 12 digits: yyyyMMddhhss
     [Migration(202504091000, "Create Initial Schema Objects")]
     public class M202504091000_CreateInitialSchema : Migration
     {

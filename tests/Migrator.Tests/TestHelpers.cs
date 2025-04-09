@@ -123,7 +123,7 @@ public static class TestHelpers
                 var fileName = Path.GetFileName(sourceSqlPath);
                 if (SqlMigrationFileRegex.IsMatch(fileName))
                 {
-                    var destPath = Path.Combine(migrationsDir, fileName); // Copy to migrations subfolder
+                    var destPath = Path.Combine(migrationsDir, fileName);
                     File.Copy(sourceSqlPath, destPath);
                 }
             }

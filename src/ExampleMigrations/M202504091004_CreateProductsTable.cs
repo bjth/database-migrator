@@ -2,7 +2,6 @@ using FluentMigrator;
 
 namespace ExampleMigrations
 {
-    // Timestamp uses 12 digits: yyyyMMddhhss
     [Migration(202504091004, "Create Products Table")]
     public class M202504091004_CreateProductsTable : Migration
     {
