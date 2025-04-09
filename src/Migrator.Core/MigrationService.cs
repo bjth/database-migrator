@@ -112,7 +112,12 @@ public class MigrationService(ILogger<MigrationService> logger)
                 }
                 catch (Exception ex)
                 {
-                     _logger.LogError(ex, "Failed to apply SQL script {Filename}. Transaction rolling back (if processor manages transactions).", sqlMigration.OriginalFilename);
+                    var errorMessage = $"Failed to apply SQL script {sqlMigration.OriginalFilename}.";
+                    _logger.LogError(ex, errorMessage + " Transaction rolling back (if processor manages transactions).");
+                    
+                    // Write detailed error to log file
+                    await WriteErrorLogAsync($"SQL Migration Error: {sqlMigration.OriginalFilename}\n{ex}");
+
                     // Rollback Transaction if not automatically handled
                     // if (processor.WasCommitted) // Check if processor handles transactions and if one was active
                     // {
@@ -127,8 +132,32 @@ public class MigrationService(ILogger<MigrationService> logger)
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed during C# migration discovery or runner setup.");
+            var errorMessage = "Failed during C# migration discovery, runner setup, or execution.";
+            _logger.LogError(ex, errorMessage);
+            
+            // Write detailed error to log file
+            await WriteErrorLogAsync($"General Migration Error:\n{ex}");
+            
             throw; // Rethrow to indicate failure
+        }
+    }
+
+    // Helper method to write errors to a log file
+    private async Task WriteErrorLogAsync(string message)
+    {
+        try
+        {
+            // Define log directory and ensure it exists
+            var logDir = Path.Combine(Directory.GetCurrentDirectory(), "logs");
+            Directory.CreateDirectory(logDir); 
+
+            // Log file inside the logs directory
+            var logFilePath = Path.Combine(logDir, "migration-error.log");
+            await File.AppendAllTextAsync(logFilePath, $"{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC - {message}\n---\n");
+        }
+        catch (Exception logEx)
+        {
+            _logger.LogError(logEx, "Failed to write to migration-error.log");
         }
     }
 

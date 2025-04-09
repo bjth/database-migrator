@@ -52,6 +52,138 @@ A generic database migrator tool for .NET 9, supporting MSSQL, PostgreSQL, and S
     dotnet test
     ```
 
+## Running in Docker
+
+1.  **Build the Image:** From the root of the repository:
+    ```bash
+    docker build -t migrator-runner -f src/Migrator.Runner/Dockerfile .
+    ```
+2.  **Run the Container:** Mount your local migrations folder into the container and provide arguments.
+
+    **Windows (PowerShell/CMD):**
+    ```bash
+    docker run --rm `
+      -v C:\my-app-migrations:/app/migrations `
+      migrator-runner `
+      --type SqlServer `
+      --connection "Your_Connection_String_Accessible_From_Container" `
+      --path /app/migrations
+    ```
+
+    **Linux/macOS:**
+    ```bash
+    docker run --rm \
+      -v /path/to/my-app-migrations:/app/migrations \
+      migrator-runner \
+      --type SqlServer \
+      --connection "Your_Connection_String_Accessible_From_Container" \
+      --path /app/migrations
+    ```
+    *   Replace `<host_path>` with the absolute path to your local migrations folder.
+    *   Ensure the `--path` argument points to `/app/migrations` (the mount path inside the container).
+    *   Make sure the database is accessible from the container (use Docker networking like `host.docker.internal` if needed).
+
+## Running in Kubernetes (AKS Example)
+
+This example demonstrates running the migrator as a Kubernetes Job, suitable for CI/CD pipelines. It uses an init container to fetch migrations from a Git repository onto a shared volume.
+
+**Assumptions:**
+*   Kubernetes cluster (like AKS) is available.
+*   The `migrator-runner` Docker image is pushed to a container registry accessible by the cluster (e.g., ACR or Docker Hub).
+*   Database connection string is stored in a K8s secret named `db-credentials` with key `connectionString`.
+*   Migrations (DLLs/SQL files) are in a Git repository.
+
+**Example `migration-job.yaml`:**
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: database-migration-job
+spec:
+  template:
+    spec:
+      volumes:
+      - name: migration-files # Shared volume for migrations
+        emptyDir: {} 
+      - name: migration-logs # Optional: Volume for logs
+        emptyDir: {}
+
+      initContainers: # Fetches migrations before the main container runs
+      - name: git-sync-migrations
+        image: alpine/git:latest # Small image with git
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          echo "Cloning migrations repository..."
+          # --- CUSTOMIZE --- 
+          # Replace with your Git repo URL and branch/tag.
+          # Use SSH keys mounted as secrets for private repos if needed.
+          GIT_REPO="https://github.com/your-repo/your-migrations.git"
+          GIT_BRANCH="main"
+          # Path within the repo where built migrations are located
+          REPO_MIGRATIONS_PATH="src/ExampleMigrations/bin/Release/net9.0"
+          # --- END CUSTOMIZE ---
+          git clone --branch $GIT_BRANCH --depth 1 $GIT_REPO /migrations-repo
+          echo "Copying migrations from $REPO_MIGRATIONS_PATH..."
+          cp -r /migrations-repo/$REPO_MIGRATIONS_PATH/* /migration-volume/
+          echo "Migrations copied to shared volume."
+        volumeMounts:
+        - name: migration-files # Mount the shared volume
+          mountPath: /migration-volume 
+
+      containers: # Main migration container
+      - name: migrator-runner
+        # --- CUSTOMIZE --- 
+        image: yourregistry/migrator-runner:latest # Replace with your container image
+        # --- END CUSTOMIZE ---
+        command: ["dotnet", "Migrator.Runner.dll"]
+        args:
+          # --- CUSTOMIZE --- 
+          - "--type"
+          - "SqlServer" # Or PostgreSql, SQLite
+          - "--connection"
+          - "$(DB_CONNECTION_STRING)" # Reference the secret
+          - "--path"
+          - "/app/migrations" # Must match volumeMounts.mountPath below
+          # Optional: Add --verbose
+          # --- END CUSTOMIZE ---
+        env:
+          - name: DB_CONNECTION_STRING
+            valueFrom:
+              secretKeyRef:
+                name: db-credentials # Name of the Kubernetes secret
+                key: connectionString # Key within the secret
+        volumeMounts:
+        - name: migration-files # Mount the shared volume containing migrations
+          mountPath: /app/migrations 
+        - name: migration-logs # Mount the log volume
+          mountPath: /app/logs # Matches path used by WriteErrorLogAsync
+
+      restartPolicy: Never # Or OnFailure
+  backoffLimit: 1
+```
+
+**Steps:**
+
+1.  **Create Secret:** Store the DB connection string:
+    ```bash
+    kubectl create secret generic db-credentials \
+      --from-literal=connectionString='Your_Actual_Database_Connection_String'
+    ```
+2.  **Customize YAML:** Update the placeholders (`image`, `GIT_REPO`, `GIT_BRANCH`, `REPO_MIGRATIONS_PATH`, `--type`) in the `migration-job.yaml` file.
+3.  **Apply Job:**
+    ```bash
+    kubectl apply -f migration-job.yaml
+    ```
+4.  **Monitor:**
+    ```bash
+    kubectl get jobs
+    kubectl describe job database-migration-job
+    kubectl logs job/database-migration-job -c migrator-runner # Main logs
+    kubectl logs job/database-migration-job -c git-sync-migrations # Init logs
+    ```
+
 ## Key Dependencies & Acknowledgements
 
 This project relies on several excellent open-source libraries:
