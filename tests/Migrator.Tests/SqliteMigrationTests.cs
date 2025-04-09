@@ -96,4 +96,81 @@ public class SqliteMigrationTests : IDisposable
         // Cleanup
         TestHelpers.CleanupTestMigrations(migrationsDir);
     }
-} 
+
+    [Fact]
+    public async Task ExecuteMigrationsAsync_SQLite_RunsInterleavedMigrationsInOrder()
+    {
+        // Arrange
+        var testId = "sqlite_interleaved";
+        // This helper will need to create specific C# and SQL files with interleaved timestamps
+        var migrationsDir = TestHelpers.PrepareInterleavedMigrations(testId); 
+        var logger = _loggerFactory.CreateLogger<MigrationService>();
+        var migrationService = new MigrationService(logger);
+
+        // Act
+        await Should.NotThrowAsync(async () =>
+        {
+            await migrationService.ExecuteMigrationsAsync(DatabaseType.SQLite, _connectionString, migrationsDir);
+        });
+
+        // Assert
+        // This helper will need to check the specific state resulting from the interleaved migrations
+        await TestHelpers.AssertDatabaseStateAfterInterleavedMigrations(DatabaseType.SQLite, _connectionString); 
+        // This helper will need to verify the VersionInfo table entries and order
+        await TestHelpers.AssertVersionInfoOrder(DatabaseType.SQLite, _connectionString, TestHelpers.GetExpectedInterleavedVersions());
+
+        // Cleanup
+        TestHelpers.CleanupTestMigrations(migrationsDir); // Can reuse cleanup
+    }
+
+    [Fact]
+    public async Task ExecuteMigrationsAsync_SQLite_HaltsAndRollsBackOnFailure()
+    {
+        // Arrange
+        var testId = "sqlite_failure";
+        // Expected successful: C# 1000, SQL 1001, C# 1002
+        var expectedSuccessfulVersions = new List<long> { 202504091000, 202504091001, 202504091002 }; 
+        long faultyMigrationVersion = 202504091003; // This one will fail
+        long skippedCSharpMigrationVersion = 202504091004; // Should be skipped
+        long skippedSqlMigrationVersion = 202504091005; // Should be skipped
+
+        // Prepare migrations including one designed to fail at timestamp 1003
+        var migrationsDir = TestHelpers.PrepareMigrationsWithFailure(testId, faultyMigrationVersion, skippedSqlMigrationVersion);
+        var logger = _loggerFactory.CreateLogger<MigrationService>();
+        var migrationService = new MigrationService(logger);
+        string logFilePath = Path.Combine(Directory.GetCurrentDirectory(), "logs", "migration-error.log");
+        if(File.Exists(logFilePath)) File.Delete(logFilePath); // Clear log before test
+
+        // Act
+        var exception = await Should.ThrowAsync<Exception>(async () =>
+        {
+            await migrationService.ExecuteMigrationsAsync(DatabaseType.SQLite, _connectionString, migrationsDir);
+        });
+
+        // Assert Exception
+        exception.ShouldNotBeNull();
+        exception.Message.ShouldContain($"CRITICAL ERROR applying SQL migration {faultyMigrationVersion}");
+        exception.Message.ShouldContain("Halting execution");
+
+        // Assert Database State (only migrations *before* failure should be applied)
+        await TestHelpers.AssertVersionInfoOrder(DatabaseType.SQLite, _connectionString, expectedSuccessfulVersions);
+        // Verify the faulty and subsequent migrations are NOT in the version table
+        var appliedVersions = await TestHelpers.GetAppliedVersionsAsync(DatabaseType.SQLite, _connectionString);
+        appliedVersions.ShouldNotContain(faultyMigrationVersion);
+        appliedVersions.ShouldNotContain(skippedCSharpMigrationVersion); // Check skipped C#
+        appliedVersions.ShouldNotContain(skippedSqlMigrationVersion);    // Check skipped SQL
+        // Verify that schema/data changes from the *skipped* migration did not occur
+        await TestHelpers.AssertDataFromSkippedMigrationNotPresent(DatabaseType.SQLite, _connectionString, skippedSqlMigrationVersion); // Pass skipped version
+
+        // Assert Log File (Optional but good)
+        File.Exists(logFilePath).ShouldBeTrue("Error log file should exist.");
+        var logContent = await File.ReadAllTextAsync(logFilePath);
+        logContent.ShouldContain($"CRITICAL ERROR applying SQL migration {faultyMigrationVersion}");
+        logContent.ShouldContain("Migration process stopped.");
+        logContent.ShouldContain("Underlying Exception:"); // Check for the original exception details
+
+        // Cleanup
+        TestHelpers.CleanupTestMigrations(migrationsDir);
+        if(File.Exists(logFilePath)) File.Delete(logFilePath); // Clean up log file
+    }
+}

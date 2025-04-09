@@ -9,6 +9,7 @@ using FluentMigrator;
 using FluentMigrator.Runner.Processors;
 using FluentMigrator.Expressions;
 using FluentMigrator.Model;
+using FluentMigrator.Infrastructure;
 
 namespace Migrator.Core;
 
@@ -32,7 +33,7 @@ public class MigrationService(ILogger<MigrationService> logger)
 
     public async Task ExecuteMigrationsAsync(DatabaseType dbType, string connectionString, string migrationsPath)
     {
-        _logger.LogInformation("Starting migration process...");
+        _logger.LogInformation("Starting migration process (Interleaved C#/SQL with manual transactions)...");
         _logger.LogInformation("Database Type: {DbType}", dbType);
         _logger.LogInformation("Migrations Path: {Path}", migrationsPath);
 
@@ -42,103 +43,168 @@ public class MigrationService(ILogger<MigrationService> logger)
             throw new DirectoryNotFoundException($"Migrations directory not found: {migrationsPath}");
         }
 
-        // 1. Discover all potential migration tasks (SQL files) by filename
-        var migrationTasks = DiscoverSqlMigrations(migrationsPath);
-        // Log how many SQL tasks were found, but don't exit if none were found.
-        // C# migrations might still exist in assemblies.
-        _logger.LogInformation("Discovered {Count} SQL migration tasks based on file naming.", migrationTasks.Count);
+        // 1. Discover SQL migration tasks first (needed for logging count)
+        var sqlMigrationTasks = DiscoverSqlMigrations(migrationsPath);
+        _logger.LogInformation("Discovered {Count} SQL migration tasks based on file naming.", sqlMigrationTasks.Count);
 
-        // 2. Create service provider, scanning *only actual assemblies* for C# migrations
+        // 2. Create service provider, scanning assemblies for C# migrations
+        // Ensure WithoutGlobalTransaction is NOT called here if it causes issues or is unavailable.
         var serviceProvider = CreateServices(dbType, connectionString, migrationsPath);
 
         using var scope = serviceProvider.CreateScope();
         var runner = scope.ServiceProvider.GetRequiredService<IMigrationRunner>();
+        var loader = scope.ServiceProvider.GetRequiredService<IMigrationInformationLoader>();
         var versionLoader = scope.ServiceProvider.GetRequiredService<IVersionLoader>();
-        var processor = scope.ServiceProvider.GetService<FluentMigrator.IMigrationProcessor>();
+        // Get the processor which is crucial for manual transaction and SQL execution
+        var processor = scope.ServiceProvider.GetService<IMigrationProcessor>();
 
-        if (processor == null && migrationTasks.Any(t => t.Type == MigrationType.Sql))
+        // Processor is essential for SQL and potentially for C# transaction control via ApplyMigrationUp
+        if (processor == null)
         {
-            _logger.LogError("Could not retrieve the migration processor, which is required to run raw SQL scripts.");
-            throw new InvalidOperationException("Migration processor is unavailable, cannot execute SQL scripts.");
+            _logger.LogError("Migration processor is null. Cannot manage transactions or run SQL scripts. Aborting.");
+            throw new InvalidOperationException("Migration processor is unavailable.");
         }
 
         try
         {
-            // Execute C# migrations first
-            _logger.LogInformation("Applying C# migrations...");
-            runner.MigrateUp();
-            _logger.LogInformation("C# migrations applied successfully.");
+            // 3. Load C# migration metadata
+            var csharpMigrations = loader.LoadMigrations();
+            _logger.LogInformation("Loaded {Count} C# migrations from assemblies.", csharpMigrations.Count);
 
-            // Get applied versions AFTER C# migrations
-            var appliedVersions = runner.MigrationLoader.LoadMigrations()
-                                     .Select(kvp => kvp.Key)
-                                     .ToHashSet();
-
-            _logger.LogInformation("Already applied versions (including C# migrations run just now): {Versions}", string.Join(", ", appliedVersions.OrderBy(v => v)));
-
-            // Now execute SQL migrations
-            _logger.LogInformation("Applying SQL migrations...");
-            foreach (var sqlMigration in migrationTasks.OrderBy(m => m.Timestamp))
+            // 4. Combine C# and SQL migrations into a single, sortable list
+            // Define a local record or tuple to hold combined info
+            var allMigrations = new List<(long Version, string Description, IMigrationInfo? CSharpInfo, MigrationTask? SqlTask)>();
+            
+            foreach (var kvp in csharpMigrations)
             {
-                // Check the IVersionLoader's current list, which includes C# migrations AND
-                // any SQL migrations applied earlier in *this* loop/execution.
-                if (versionLoader.VersionInfo.HasAppliedMigration(sqlMigration.Timestamp))
+                var attr = kvp.Value.Migration.GetType().GetCustomAttribute<MigrationAttribute>();
+                var description = attr?.Description ?? $"C# Migration: {kvp.Value.Migration.GetType().Name}";
+                allMigrations.Add((kvp.Key, description, kvp.Value, null)); // Add C# migration info
+                _logger.LogTrace("Adding C# Migration: Version={Version}, Type={TypeName}", kvp.Key, kvp.Value.Migration.GetType().Name);
+            }
+            foreach (var sqlTask in sqlMigrationTasks)
+            {
+                // Use MigrationType.Sql from MigrationTask.cs context
+                if (sqlTask.Type == MigrationType.Sql) {
+                    allMigrations.Add((sqlTask.Timestamp, $"SQL Migration: {sqlTask.OriginalFilename}", null, sqlTask)); // Add SQL task info
+                    _logger.LogTrace("Adding SQL Migration: Version={Version}, File={FileName}", sqlTask.Timestamp, sqlTask.OriginalFilename);
+                }
+            }
+
+            // 5. Sort all migrations by version number
+            var sortedMigrations = allMigrations.OrderBy(m => m.Version).ToList();
+            _logger.LogDebug("Total migrations found (C# + SQL): {Count}. Sorted by version.", sortedMigrations.Count);
+
+            if (!sortedMigrations.Any())
+            {
+                 _logger.LogWarning("No migrations (C# or SQL) found to apply.");
+                 _logger.LogInformation("Migration process completed successfully (no migrations executed).");
+                 return; // Nothing more to do
+            }
+
+            // 6. Load initially applied versions
+            versionLoader.LoadVersionInfo();
+            var appliedVersions = versionLoader.VersionInfo.AppliedMigrations();
+            _logger.LogInformation("Initially applied versions: {Versions}", appliedVersions.Any() ? string.Join(", ", appliedVersions.OrderBy(v => v)) : "None");
+
+            // 7. Iterate and apply migrations one by one, each in its own transaction
+            _logger.LogInformation("Applying migrations in interleaved order...");
+            foreach (var migration in sortedMigrations)
+            {
+                if (versionLoader.VersionInfo.HasAppliedMigration(migration.Version))
                 {
-                    _logger.LogInformation("Skipping already applied SQL migration: {Timestamp} - {Filename}", sqlMigration.Timestamp, sqlMigration.OriginalFilename);
+                    _logger.LogInformation("Skipping already applied migration: {Version} - {Description}", migration.Version, migration.Description);
                     continue;
                 }
 
-                _logger.LogInformation("Applying SQL migration: {Timestamp} - {Filename}", sqlMigration.Timestamp, sqlMigration.OriginalFilename);
-                string sqlScript = await File.ReadAllTextAsync(sqlMigration.FullPath);
+                string migrationTypeString = migration.CSharpInfo != null ? "C#" : "SQL";
+                _logger.LogInformation("Applying {Type} migration: {Version} - {Description}", migrationTypeString, migration.Version, migration.Description);
 
-                // Execute SQL within a transaction managed by the processor
-                // NOTE: FluentMigrator processors often handle transactions implicitly or require specific methods.
-                // Assuming ProcessorBase.Execute handles this; adjust if specific transaction commands are needed.
+                // Each migration attempt is wrapped in its own transaction and error handling block
+                bool success = false;
                 try
                 {
-                    // Start Transaction if not automatically handled
-                    // processor.BeginTransaction(); 
+                    processor.BeginTransaction();
+                    _logger.LogDebug("Begun transaction for migration {Version}.", migration.Version);
 
-                    processor.Execute(sqlScript);
+                    // Check if it's a C# migration
+                    if (migration.CSharpInfo != null)
+                    {
+                        // Use MigrateUp(version) instead of ApplyMigrationUp
+                        runner.MigrateUp(migration.Version);
+                        _logger.LogDebug("FluentMigrator runner executed MigrateUp({Version}) for C# migration within transaction.", migration.Version);
+                    }
+                    // Check if it's an SQL migration (via SqlTask being not null)
+                    else if (migration.SqlTask != null && migration.SqlTask.Type == MigrationType.Sql)
+                    {
+                        string sqlScript = await File.ReadAllTextAsync(migration.SqlTask.FullPath);
+                        processor.Execute(sqlScript); // Execute within the transaction
 
-                    // Record the SQL migration using the IVersionLoader obtained earlier
-                    // This ensures FluentMigrator knows the SQL script was applied.
-                    // The VersionLoader handles updating the version table in the database AND the in-memory list.
-                    versionLoader.UpdateVersionInfo(sqlMigration.Timestamp, $"SQL Migration: {sqlMigration.OriginalFilename}");
+                        // Manually record the SQL migration AFTER successful execution
+                        versionLoader.UpdateVersionInfo(migration.Version, migration.Description);
+                        _logger.LogInformation("Successfully applied SQL script {Filename}.", migration.SqlTask.OriginalFilename);
+                    }
+                    else
+                    {
+                       throw new InvalidOperationException($"Invalid combined migration state for version {migration.Version}.");
+                    }
 
-                    // Commit Transaction if not automatically handled
-                    // processor.CommitTransaction(); 
-                     _logger.LogInformation("Successfully applied SQL script {Filename}.", sqlMigration.OriginalFilename);
+                    // If we reached here, the migration step was successful
+                    processor.CommitTransaction();
+                    _logger.LogDebug("Committed transaction for migration {Version}.", migration.Version);
+                    success = true;
                 }
                 catch (Exception ex)
                 {
-                    var errorMessage = $"Failed to apply SQL script {sqlMigration.OriginalFilename}.";
-                    _logger.LogError(ex, errorMessage + " Transaction rolling back (if processor manages transactions).");
-                    
-                    // Write detailed error to log file
-                    await WriteErrorLogAsync($"SQL Migration Error: {sqlMigration.OriginalFilename}\n{ex}");
+                    // Adjust error source logic
+                    var errorSource = migration.CSharpInfo != null 
+                        ? migration.CSharpInfo.Migration.GetType().Name 
+                        : (migration.SqlTask != null ? migration.SqlTask.OriginalFilename : "Unknown Migration");
+                        
+                    var currentTypeString = migration.CSharpInfo != null ? "C#" : "SQL"; // Determine type for error message
+                    var errorMessage = $"CRITICAL ERROR applying {currentTypeString} migration {migration.Version} ({errorSource}). Halting execution.";
 
-                    // Rollback Transaction if not automatically handled
-                    // if (processor.WasCommitted) // Check if processor handles transactions and if one was active
-                    // {
-                    //      processor.RollbackTransaction();
-                    // }
-                    throw new Exception($"Failed to apply SQL script {sqlMigration.OriginalFilename}. See inner exception.", ex);
+                    _logger.LogError(ex, errorMessage + " Attempting transaction rollback.");
+
+                    // Attempt to roll back the transaction (only if it wasn't already committed)
+                    if (!success) // Check if commit happened before exception
+                    {
+                        try
+                        {
+                            processor.RollbackTransaction();
+                            _logger.LogInformation("Transaction rollback attempted successfully for failed migration {Version}.", migration.Version);
+                        }
+                        catch (Exception rollbackEx)
+                        {
+                            _logger.LogError(rollbackEx, "FATAL: Failed to rollback transaction after error in migration {Version}. Database might be in an inconsistent state.", migration.Version);
+                            // Log separately, but rethrow the original exception
+                             await WriteErrorLogAsync($"Rollback Failure after {errorMessage}\nRollback Exception:\n{rollbackEx}");
+                        }
+                    }
+
+                    // Write detailed error to log file, indicating halt
+                    await WriteErrorLogAsync($"{errorMessage}\nMigration process stopped.\nUnderlying Exception:\n{ex}");
+
+                    // Rethrow the original exception to stop the migration process completely
+                    throw new Exception(errorMessage, ex);
                 }
-            }
-             _logger.LogInformation("SQL migrations applied successfully.");
+            } // End foreach migration
 
              _logger.LogInformation("Migration process completed successfully.");
         }
         catch (Exception ex)
         {
-            var errorMessage = "Failed during C# migration discovery, runner setup, or execution.";
-            _logger.LogError(ex, errorMessage);
-            
-            // Write detailed error to log file
-            await WriteErrorLogAsync($"General Migration Error:\n{ex}");
-            
-            throw; // Rethrow to indicate failure
+            // Catch exceptions from setup or the main loop if they weren't caught inside
+             if (!ex.Message.StartsWith("CRITICAL ERROR applying")) // Avoid double logging if already caught
+             {
+                var errorMessage = "An unexpected error occurred during the migration process setup or outer loop.";
+                _logger.LogError(ex, errorMessage);
+                await WriteErrorLogAsync($"General Migration Error (Setup/Outer Loop):\n{ex}");
+             } else {
+                 _logger.LogDebug("Caught critical error exception from inner loop. Already logged.");
+             }
+            // Always rethrow to indicate overall failure
+            throw; 
         }
     }
 
@@ -208,7 +274,7 @@ public class MigrationService(ILogger<MigrationService> logger)
 
                 // Set connection string
                 rb.WithGlobalConnectionString(connectionString);
-
+                
                 // Scan only the found assemblies containing IMigration implementations
                 if (actualAssemblies.Length > 0)
                 {

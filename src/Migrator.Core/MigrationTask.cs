@@ -10,11 +10,12 @@ public enum DatabaseType
     SQLite
 }
 
+// Restore the original enum definition
 public enum MigrationType
 {
-    Unknown = 0,
-    Dll,
-    Sql
+    Unknown = 0, // Keep unknown for default/error cases
+    Dll,         // Might be useful if we parse DLL names later
+    Sql          // Used for SQL files
 }
 
 public record MigrationTask
