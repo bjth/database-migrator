@@ -171,10 +171,12 @@ public class MigrationService(ILogger<MigrationService> logger)
                     var errorMessage =
                         $"CRITICAL ERROR applying {currentTypeString} migration {migration.Version} ({errorSource}). Halting execution.";
 
-                    logger.LogError(ex, errorMessage + " Attempting transaction rollback.");
+                    logger.LogError(ex, $"{errorMessage} Attempting transaction rollback.");
 
                     // Attempt to roll back the transaction (only if it wasn't already committed)
-                    if (!success) // Check if commit happened before exception
+                    if (!success)
+                    {
+                        // Check if commit happened before exception
                         try
                         {
                             processor.RollbackTransaction();
@@ -191,6 +193,7 @@ public class MigrationService(ILogger<MigrationService> logger)
                             await WriteErrorLogAsync(
                                 $"Rollback Failure after {errorMessage}\nRollback Exception:\n{rollbackEx}");
                         }
+                    }
 
                     // Write detailed error to log file, indicating halt
                     await WriteErrorLogAsync(
@@ -299,7 +302,11 @@ public class MigrationService(ILogger<MigrationService> logger)
                 {
                     logger.LogInformation("Scanning {Count} actual assemblies for C# migrations.",
                         actualAssemblies.Length);
-                    foreach (var asm in actualAssemblies) logger.LogDebug(" - {AssemblyName}", asm.FullName);
+                    foreach (var asm in actualAssemblies)
+                    {
+                        logger.LogDebug(" - {AssemblyName}", asm.FullName);
+                    }
+
                     rb.ScanIn(actualAssemblies).For.Migrations();
                 }
                 else
@@ -333,6 +340,7 @@ public class MigrationService(ILogger<MigrationService> logger)
             path);
 
         foreach (var dllFile in dllFiles)
+        {
             try
             {
                 logger.LogTrace("Attempting to load potential assembly: {DllFile}", dllFile);
@@ -362,10 +370,11 @@ public class MigrationService(ILogger<MigrationService> logger)
             {
                 logger.LogWarning(ex, "Failed to load assembly {DllFile}. It will not be scanned.", dllFile);
             }
+        }
 
         logger.LogInformation("Identified {Count} actual assemblies containing C# migrations to scan.",
             assemblies.Count);
-        
+
         return assemblies;
     }
 }

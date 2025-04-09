@@ -106,9 +106,12 @@ public abstract class IntegrationTestBase : IAsyncLifetime, IDisposable
         };
     }
 
-    protected virtual void Dispose(bool disposing)
+    private void Dispose(bool disposing)
     {
-        if (disposing) _serviceProvider.Dispose();
+        if (disposing)
+        {
+            _serviceProvider.Dispose();
+        }
     }
 
     protected enum TestcontainerDatabase
@@ -163,8 +166,12 @@ public class XUnitLogger(ITestOutputHelper outputHelper, string categoryName) : 
         try
         {
             outputHelper.WriteLine(
-                $"[{DateTime.Now:HH:mm:ss} {logLevel.ToString().ToUpperInvariant().Substring(0, 3)}] {categoryName}: {formatter(state, exception)}");
-            if (exception != null) outputHelper.WriteLine(exception.ToString());
+                $"[{DateTime.Now:HH:mm:ss} {logLevel.ToString().ToUpperInvariant()[..3]}] {categoryName}: {formatter(state, exception)}");
+            
+            if (exception != null)
+            {
+                outputHelper.WriteLine(exception.ToString());
+            }
         }
         catch (Exception ex) // Avoid exceptions from logging stopping tests
         {

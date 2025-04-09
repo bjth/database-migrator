@@ -29,18 +29,30 @@ public record MigrationTask
     {
         task = null;
         var fileName = Path.GetFileName(filePath);
-        if (string.IsNullOrEmpty(fileName) || fileName.Length < 14) // Basic length check
+        if (string.IsNullOrEmpty(fileName) || fileName.Length < 14)
+        {
             return false;
+        }
+
         if (!long.TryParse(fileName.AsSpan(0, 12), NumberStyles.None, CultureInfo.InvariantCulture,
-                out var timestamp)) return false;
+                out var timestamp))
+        {
+            return false;
+        }
 
         MigrationType type;
         if (fileName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+        {
             type = MigrationType.Dll;
+        }
         else if (fileName.EndsWith(".sql", StringComparison.OrdinalIgnoreCase))
+        {
             type = MigrationType.Sql;
+        }
         else
+        {
             return false; // Unsupported file type
+        }
 
         task = new MigrationTask
         {

@@ -6,7 +6,7 @@ using Serilog.Events;
 
 namespace Migrator.Runner;
 
-internal class Program
+internal static class Program
 {
     private static async Task<int> Main(string[] args)
     {
@@ -28,7 +28,11 @@ internal class Program
                 async errs =>
                 {
                     Log.Error("Argument parsing failed:");
-                    foreach (var err in errs) Log.Error("- {ErrorType}: {Details}", err.Tag, err.ToString());
+                    foreach (var err in errs)
+                    {
+                        Log.Error("- {ErrorType}: {Details}", err.Tag, err.ToString());
+                    }
+
                     Log.Warning("Use --help for usage information.");
                     await Task.CompletedTask; // Need async lambda
                     return 1; // Failure exit code
