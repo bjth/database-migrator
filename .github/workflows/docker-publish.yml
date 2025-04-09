@@ -51,8 +51,8 @@ jobs:
       id: build-and-push
       uses: docker/build-push-action@v5
       with:
-        context: .
-        file: src/Migrator.Runner/Dockerfile
+        context: ./src/Migrator.Runner
+        file: ./src/Migrator.Runner/Dockerfile
         push: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
