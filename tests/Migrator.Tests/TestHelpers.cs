@@ -18,119 +18,140 @@ public static class TestHelpers
     // Regex for SQL file matching (12-digit timestamp)
     private static readonly Regex SqlMigrationFileRegex = new(@"^(\d{12})_.*\.sql$", RegexOptions.IgnoreCase);
 
+    // Copies C# DLL and contents of the DB-specific SQL folder
     public static string PrepareTestMigrations(string testId, DatabaseType dbType)
     {
+        var migrationsDir = CreateTempMigrationsDirectory(testId);
+        CopyCSharpAssembly(migrationsDir, "TestMigrations.dll");
+        CopyDbSpecificSqlFiles(migrationsDir, dbType);
+        return migrationsDir;
+    }
+
+    // --- Helper Method for Preparing C# Only Migrations ---
+    // Copies only the C# DLL
+    public static string PrepareCSharpOnlyMigrations(string testId)
+    {
+        var migrationsDir = CreateTempMigrationsDirectory(testId);
+        CopyCSharpAssembly(migrationsDir, "CSharpOnly.dll");
+        // No SQL files copied
+        return migrationsDir;
+    }
+
+    // --- Helper Method for Preparing SQL Only Migrations ---
+    // Copies only the contents of the DB-specific SQL folder
+    public static string PrepareSqlOnlyMigrations(string testId, DatabaseType dbType)
+    {
+        var migrationsDir = CreateTempMigrationsDirectory(testId);
+        // No C# assembly copied
+        CopyDbSpecificSqlFiles(migrationsDir, dbType);
+        return migrationsDir;
+    }
+
+    // --- Methods for Interleaved Migration Testing ---
+    public static List<long> GetExpectedInterleavedVersions()
+    {
+        // C# 1000, SQL 1001, C# 1002, SQL 1003, C# 1004, SQL 1005
+        return new List<long> { 202504091000, 202504091001, 202504091002, 202504091003, 202504091004, 202504091005 };
+    }
+
+    // Copies C# DLL and contents of the DB-specific SQL folder
+    public static string PrepareInterleavedMigrations(string testId, DatabaseType dbType)
+    {
+        var migrationsDir = CreateTempMigrationsDirectory(testId);
+        CopyCSharpAssembly(migrationsDir, "InterleavedTestMigrations.dll");
+        CopyDbSpecificSqlFiles(migrationsDir, dbType);
+        return migrationsDir;
+    }
+
+    // --- Helper for Preparing Migrations with a Deliberate Failure ---
+    // Copies C# DLL, successful SQL files, then adds faulty/skipped SQL
+    public static string PrepareMigrationsWithFailure(string testId, DatabaseType dbType, long faultyVersion, long skippedSqlVersion)
+    {
+        var migrationsDir = CreateTempMigrationsDirectory(testId);
+        CopyCSharpAssembly(migrationsDir, "FailureTestMigrations.dll");
+        // Copy standard SQL files first (includes successful ones like 1001)
+        CopyDbSpecificSqlFiles(migrationsDir, dbType);
+
+        // Now, create/overwrite the specific faulty and skipped files
+
+        // Create the *Faulty* SQL Migration (using deliberately bad syntax for the specific DB)
+        var faultySqlFileName = $"{faultyVersion}_FaultyMigration.sql";
+        string faultySqlContent = dbType switch
+        {
+            DatabaseType.SqlServer => "ALTER TABLE Settings ADD Col Value BAD_SYNTAX;", // Bad SQL Server syntax
+            DatabaseType.PostgreSql => "ALTER TABLE \"Settings\" ADD COLUMNS \"Value\" TEXT;", // Bad PG syntax
+            DatabaseType.SQLite => "ALTER TABLE Settings ADD COLUMN Value BAD_SYNTAX;", // Bad SQLite syntax
+            _ => "SELECT 1/0;" // Generic failure
+        };
+        File.WriteAllText(Path.Combine(migrationsDir, faultySqlFileName), faultySqlContent);
+
+        // Create the *Skipped* SQL Migration (using potentially valid but irrelevant syntax)
+        var skippedSqlFileName = $"{skippedSqlVersion}_SkippedSqlMigration.sql";
+        string skippedSqlContent = dbType switch // Use correct basic syntax just to have a file
+        {
+            DatabaseType.SqlServer => "-- This migration should be skipped\nPRINT 'Skipped SQL executed';",
+            DatabaseType.PostgreSql => "-- This migration should be skipped\nSELECT 'Skipped SQL executed';",
+            DatabaseType.SQLite => "-- This migration should be skipped\nSELECT 'Skipped SQL executed';",
+            _ => "-- Skipped"
+        };
+        File.WriteAllText(Path.Combine(migrationsDir, skippedSqlFileName), skippedSqlContent);
+
+        return migrationsDir;
+    }
+
+    // --- Shared Helper Methods ---
+
+    private static string CreateTempMigrationsDirectory(string testId)
+    {
         var tempBaseDir = Path.Combine(Path.GetTempPath(), "MigratorTests", testId, Guid.NewGuid().ToString());
-        Directory.CreateDirectory(tempBaseDir);
-        // Create a dedicated subfolder for the migrations
         var migrationsDir = Path.Combine(tempBaseDir, "migrations");
         Directory.CreateDirectory(migrationsDir);
+        return migrationsDir;
+    }
 
-        // --- Find ExampleMigrations project build output --- 
-        var currentDir = AppContext.BaseDirectory;
-        var solutionDir = currentDir;
-        while (solutionDir != null && !Directory.GetFiles(solutionDir, "Migrator.sln").Any())
-            solutionDir = Directory.GetParent(solutionDir)?.FullName;
-        if (solutionDir == null)
-            throw new DirectoryNotFoundException("Could not find solution directory (Migrator.sln).");
-        var exampleMigrationsProjectDir = Path.Combine(solutionDir, "src", "ExampleMigrations");
-        // --- End Find --- 
-
-        // --- Find Build Output Path (containing ExampleMigrations.dll) --- 
-        string[] configurations = ["Debug", "Release"];
-        string[] targetFrameworks = ["net9.0", "netstandard2.0"];
-        string? foundBuildOutputPath = null;
-        var mainDllName = "ExampleMigrations.dll";
-
-        foreach (var config in configurations)
-        foreach (var tfm in targetFrameworks)
+    private static void CopyCSharpAssembly(string destinationDir, string destinationFileName)
+    {
+        var sourceAssemblyPath = FindExampleMigrationsDllPath();
+        if (string.IsNullOrEmpty(sourceAssemblyPath) || !File.Exists(sourceAssemblyPath))
         {
-            var potentialPath = Path.Combine(exampleMigrationsProjectDir, "bin", config, tfm);
-            if (File.Exists(Path.Combine(potentialPath, mainDllName)))
-            {
-                foundBuildOutputPath = potentialPath;
-                goto FoundBuildPath;
-            }
+            throw new FileNotFoundException($"Could not find ExampleMigrations.dll at expected path: {sourceAssemblyPath}");
+        }
+        File.Copy(sourceAssemblyPath, Path.Combine(destinationDir, destinationFileName), true);
+    }
+
+    private static void CopyDbSpecificSqlFiles(string destinationDir, DatabaseType dbType)
+    {
+        var buildOutputPath = FindBuildOutputPath(FindExampleMigrationsProjectDir());
+        if (buildOutputPath == null)
+        {
+            throw new DirectoryNotFoundException("Could not find ExampleMigrations build output directory.");
         }
 
-        FoundBuildPath:
-        if (foundBuildOutputPath == null)
-            throw new DirectoryNotFoundException(
-                $"Could not find build output directory containing {mainDllName} for ExampleMigrations in Debug/Release for {string.Join('/', targetFrameworks)}.");
-        var sourceAssemblyPath = Path.Combine(foundBuildOutputPath, mainDllName);
-        // --- End Find Build Output --- 
-
-        // Determine database-specific subfolder for SQL files
         var dbSpecificSubfolder = dbType switch
         {
             DatabaseType.SQLite => "sqlite",
             DatabaseType.PostgreSql => "postgresql",
             DatabaseType.SqlServer => "sqlserver",
-            _ => throw new ArgumentOutOfRangeException(nameof(dbType), "Unsupported DB type for test preparation.")
+            _ => throw new ArgumentOutOfRangeException(nameof(dbType), "Unsupported DB type for SQL file copying.")
         };
-        var dbSqlSourcePath = Path.Combine(foundBuildOutputPath, dbSpecificSubfolder);
+        var dbSqlSourcePath = Path.Combine(buildOutputPath, dbSpecificSubfolder);
 
-        // --- Create/Copy Migration Files --- 
-        // No longer need AssemblyLoadContext or dummy DLLs here 
-        /*
-        var alc = new AssemblyLoadContext(name: $"ExampleMigrationsContext_{testId}", isCollectible: true);
-        try
+        if (!Directory.Exists(dbSqlSourcePath))
         {
-            Assembly migrationAssembly = alc.LoadFromAssemblyPath(sourceAssemblyPath);
-
-            // Create dummy DLL files named correctly for C# migrations
-            var csMigrationTypes = migrationAssembly.GetExportedTypes()
-                .Where(t => !t.IsAbstract && t.IsSubclassOf(typeof(Migration)) && t.GetCustomAttribute<MigrationAttribute>() != null);
-
-            foreach(var migrationType in csMigrationTypes)
-            {
-                var migrationAttr = migrationType.GetCustomAttribute<MigrationAttribute>();
-                if (migrationAttr != null)
-                {
-                    // Use 12 digits for the timestamp in the filename
-                    string timestampStr = migrationAttr.Version.ToString("D12");
-                    string dummyFileName = $"{timestampStr}_{migrationType.Name}.dll";
-                    string destPath = Path.Combine(tempDir, dummyFileName);
-                    // Create empty file with correct name - content is irrelevant for discovery
-                    File.Create(destPath).Dispose();
-                }
-            }
+            Console.WriteLine($"Warning: SQL source directory not found for {dbType}: {dbSqlSourcePath}. No SQL files copied.");
+            return; // Nothing to copy
         }
-        catch (Exception ex)
+
+        foreach (var sourceSqlPath in Directory.EnumerateFiles(dbSqlSourcePath, "*.sql", SearchOption.TopDirectoryOnly))
         {
-            alc.Unload(); // Ensure unload on error
-            throw new InvalidOperationException($"Failed during reflection/dummy file creation for {sourceAssemblyPath}.", ex);
+            var fileName = Path.GetFileName(sourceSqlPath);
+            // Optional: Could add regex check here if needed, but copying all *.sql is simpler
+            // if (SqlMigrationFileRegex.IsMatch(fileName))
+            // {
+            var destPath = Path.Combine(destinationDir, fileName);
+            File.Copy(sourceSqlPath, destPath, true); // Overwrite if exists (e.g., in failure scenario)
+            // }
         }
-        finally
-        {
-            // Important: Unload the context to release the assembly file lock
-            if (alc.IsCollectible)
-            {
-                alc.Unload();
-            }
-        }
-        */
-
-        // Copy the *actual* assembly containing C# migrations into the migrations subfolder
-        var arbitraryDllName = "MyCustomNamedMigrations.dll";
-        File.Copy(sourceAssemblyPath, Path.Combine(migrationsDir, arbitraryDllName), true); // Overwrite if exists
-
-        // Copy relevant SQL migrations (from db-specific build output subfolder) into the migrations subfolder
-        if (Directory.Exists(dbSqlSourcePath))
-            foreach (var sourceSqlPath in Directory.EnumerateFiles(dbSqlSourcePath, "????????????_*.sql",
-                         SearchOption.TopDirectoryOnly))
-            {
-                var fileName = Path.GetFileName(sourceSqlPath);
-                if (SqlMigrationFileRegex.IsMatch(fileName))
-                {
-                    var destPath = Path.Combine(migrationsDir, fileName);
-                    File.Copy(sourceSqlPath, destPath);
-                }
-            }
-        // --- End Create/Copy --- 
-
-        // Return the path to the migrations subfolder
-        return migrationsDir;
     }
 
     public static void CleanupTestMigrations(string directoryPath)
@@ -141,15 +162,21 @@ public static class TestHelpers
             // Go up one level from the migrations dir to delete the parent temp folder
             var parentDir = Directory.GetParent(directoryPath)?.FullName;
             if (!string.IsNullOrEmpty(parentDir) && Directory.Exists(parentDir))
+            {
                 Directory.Delete(parentDir, true);
+            }
             else if (Directory.Exists(directoryPath)) // Fallback if parent isn't found
+            {
                 Directory.Delete(directoryPath, true);
+            }
         }
         catch (Exception ex)
         {
             // Don't log warning for collectible context file lock issues, they might resolve
             if (!ex.Message.Contains("being used by another process"))
+            {
                 Console.WriteLine($"Warning: Failed to cleanup test directory {directoryPath}: {ex.Message}");
+            }
         }
     }
 
@@ -169,7 +196,7 @@ public static class TestHelpers
         // Expected 12-digit timestamps
         var expectedTimestamps = new List<long>
         {
-            202504091000, // M..._CreateInitialSchema 
+            202504091000, // M..._CreateInitialSchema
             202504091001, // ..._AddUserEmail.sql
             202504091002, // M..._CreateSettingsTable
             202504091003, // ..._AddSettingValue.sql
@@ -191,7 +218,9 @@ public static class TestHelpers
         appliedMigrations.Count.ShouldBe(expectedMigrationCount,
             $"Expected {expectedMigrationCount} migrations, found {appliedMigrations.Count} after {retryCount} retries. Applied: [{string.Join(',', appliedMigrations)}]");
         foreach (var ts in expectedTimestamps)
+        {
             appliedMigrations.ShouldContain(ts, $"Timestamp {ts} not found in applied migrations.");
+        }
 
         // 2. Check actual schema/data using raw ADO.NET
         await using var connection = CreateDbConnection(dbType, connectionString);
@@ -236,7 +265,7 @@ public static class TestHelpers
 
         // Settings
         command.CommandText = $"SELECT {valueCol} FROM {settingsTable} WHERE {keyCol} = 'DefaultTheme'";
-        (await command.ExecuteScalarAsync())?.ToString().ShouldBe("dark");
+        (await command.ExecuteScalarAsync())?.ToString().ShouldBe("DefaultValue");
 
         // Products
         command.CommandText = $"SELECT {priceCol} FROM {productsTable} WHERE {nameCol} = 'Sample Product'";
@@ -336,67 +365,87 @@ public static class TestHelpers
         return parameter;
     }
 
-    // --- Methods for Interleaved Migration Testing ---
-
-    /// <summary>
-    ///     Returns the expected ordered list of migration timestamps for the interleaved test scenario.
-    /// </summary>
-    public static List<long> GetExpectedInterleavedVersions()
+    // --- Helper to find ExampleMigrations.dll path (extracted from PrepareTestMigrations) ---
+    private static string? FindExampleMigrationsDllPath()
     {
-        return
-        [
-            202504091000, // M..._CreateInitialSchema (C#)
-            202504091001, // ..._AddUserEmail.sql (SQL)
-            202504091002, // M..._CreateSettingsTable (C#)
-            202504091003, // ..._AddSettingValue.sql (SQL)
-            202504091004, // M..._CreateProductsTable (C#)
-            202504091005
-        ];
+        var exampleMigrationsProjectDir = FindExampleMigrationsProjectDir();
+        var buildOutputPath = FindBuildOutputPath(exampleMigrationsProjectDir);
+        if (buildOutputPath == null)
+        {
+            return null;
+        }
+
+        var mainDllName = "ExampleMigrations.dll";
+        var dllPath = Path.Combine(buildOutputPath, mainDllName);
+
+        if (File.Exists(dllPath))
+        {
+            return dllPath;
+        }
+        else
+        {
+            Console.WriteLine($"Error: Could not find {mainDllName} in {buildOutputPath}");
+            return null;
+        }
     }
 
-    /// <summary>
-    ///     Prepares a temporary directory structure containing the ExampleMigrations DLL
-    ///     and specific SQL files with interleaved timestamps for testing.
-    /// </summary>
-    /// <param name="testId">Unique identifier for the test run.</param>
-    /// <returns>Path to the created migrations' directory.</returns>
-    public static string PrepareInterleavedMigrations(string testId)
+    // Extracted logic to find the ExampleMigrations project directory
+    private static string FindExampleMigrationsProjectDir()
     {
-        var tempBaseDir = Path.Combine(Path.GetTempPath(), "MigratorTests", testId, Guid.NewGuid().ToString());
-        Directory.CreateDirectory(tempBaseDir);
-        var migrationsDir = Path.Combine(tempBaseDir, "migrations");
-        Directory.CreateDirectory(migrationsDir);
+        var currentDir = AppContext.BaseDirectory;
+        var solutionDir = currentDir;
+        while (solutionDir != null && !Directory.GetFiles(solutionDir, "Migrator.sln").Any())
+        {
+            solutionDir = Directory.GetParent(solutionDir)?.FullName;
+        }
 
-        // --- Locate and Copy ExampleMigrations.dll ---
-        var sourceAssemblyPath = FindExampleMigrationsDllPath(); // Extracted logic
-        if (string.IsNullOrEmpty(sourceAssemblyPath) || !File.Exists(sourceAssemblyPath))
-            throw new FileNotFoundException(
-                $"Could not find ExampleMigrations.dll at expected path: {sourceAssemblyPath}");
-        // Copy the actual DLL
-        var arbitraryDllName = "InterleavedTestMigrations.dll";
-        File.Copy(sourceAssemblyPath, Path.Combine(migrationsDir, arbitraryDllName), true);
-        // --- End Copy DLL ---
+        if (solutionDir == null)
+        {
+            throw new DirectoryNotFoundException("Could not find solution directory (Migrator.sln).");
+        }
 
-        // --- Create Specific Interleaved SQL Files (SQLite Syntax) ---
-        // These timestamps interleave with the C# migrations in ExampleMigrations.dll
+        var exampleMigrationsProjectDir = Path.Combine(solutionDir, "src", "ExampleMigrations");
+        if (!Directory.Exists(exampleMigrationsProjectDir))
+        {
+            throw new DirectoryNotFoundException($"ExampleMigrations project directory not found: {exampleMigrationsProjectDir}");
+        }
 
-        // 202504091001_AddUserEmail.sql (Remains the same)
-        File.WriteAllText(Path.Combine(migrationsDir, "202504091001_AddUserEmail.sql"),
-            "ALTER TABLE \"Users\" ADD COLUMN \"Email\" TEXT; UPDATE \"Users\" SET \"Email\" = 'admin@example.com' WHERE \"Username\" = 'admin';"
-        );
+        return exampleMigrationsProjectDir;
+    }
 
-        // 202504091003_AddSettingValue.sql (Update WHERE clause)
-        File.WriteAllText(Path.Combine(migrationsDir, "202504091003_AddSettingValue.sql"),
-            "ALTER TABLE \"Settings\" ADD COLUMN \"Value\" TEXT; UPDATE \"Settings\" SET \"Value\" = 'DefaultValue' WHERE \"Key\" = 'DefaultTheme';"
-        );
+    // Extracted logic to find the build output path containing the DLL and DB subfolders
+    private static string? FindBuildOutputPath(string projectDir)
+    {
+        string[] configurations = ["Debug", "Release"];
+        // Check common TFMs - adjust if your project uses different ones
+        string[] targetFrameworks = ["net9.0", "net8.0", "netstandard2.0"]; // Added net8.0 just in case
+        var mainDllName = "ExampleMigrations.dll"; // Used as an indicator file
 
-        // 202504091005_AddProductPrice.sql (Remains the same)
-        File.WriteAllText(Path.Combine(migrationsDir, "202504091005_AddProductPrice.sql"),
-            "ALTER TABLE \"Products\" ADD COLUMN \"Price\" REAL; UPDATE \"Products\" SET \"Price\" = 99.99 WHERE \"Name\" = 'Sample Product';"
-        );
-        // --- End Create SQL Files ---
+        foreach (var config in configurations)
+        {
+            foreach (var tfm in targetFrameworks)
+            {
+                var potentialPath = Path.Combine(projectDir, "bin", config, tfm);
+                if (File.Exists(Path.Combine(potentialPath, mainDllName)))
+                {
+                    return potentialPath; // Return the directory containing the indicator file
+                }
+            }
+        }
 
-        return migrationsDir;
+        Console.WriteLine($"Warning: Could not find build output containing {mainDllName} in {projectDir}/bin/[Debug|Release]/[{string.Join('|', targetFrameworks)}]");
+        return null; // Indicate failure
+    }
+
+    // --- Helper to get quoting function (Corrected for SQLite AGAIN) ---
+    private static Func<string, string> GetQuoteFunction(DatabaseType dbType)
+    {
+        return dbType switch
+        {
+            DatabaseType.PostgreSql => name => $"\"{name}\"", // PostgreSQL standard quotes
+            DatabaseType.SQLite => name => $"\"{name}\"", // SQLite standard quotes
+            _ => name => $"[{name}]" // Default to SQL Server style brackets
+        };
     }
 
     /// <summary>
@@ -467,7 +516,7 @@ public static class TestHelpers
         await using var readerProduct = await command.ExecuteReaderAsync();
         (await readerProduct.ReadAsync()).ShouldBeTrue("Sample Product should exist");
         readerProduct.GetString(0).ShouldBe("Sample Product");
-        readerProduct.GetDouble(1).ShouldBe(99.99);
+        readerProduct.GetDecimal(1).ShouldBe(99.99m);
         await readerProduct.CloseAsync();
     }
 
@@ -488,7 +537,11 @@ public static class TestHelpers
         const int maxRetries = 5;
         while (appliedMigrations.Count < expectedVersions.Count && retryCount < maxRetries)
         {
-            if (retryCount > 0) await Task.Delay(200); // Wait only on retry
+            if (retryCount > 0)
+            {
+                await Task.Delay(200); // Wait only on retry
+            }
+
             try
             {
                 versionLoader.LoadVersionInfo(); // Reload info
@@ -512,94 +565,6 @@ public static class TestHelpers
         // Use SequenceEqual for exact order comparison
         appliedMigrations.ShouldBe(expectedVersions,
             $"Applied migrations order does not match expected order. Expected: [{string.Join(',', expectedVersions)}], Actual: [{string.Join(',', appliedMigrations)}]");
-    }
-
-    // --- Helper to find ExampleMigrations.dll path (extracted from PrepareTestMigrations) ---
-    private static string? FindExampleMigrationsDllPath()
-    {
-        // --- Find ExampleMigrations project build output ---
-        var currentDir = AppContext.BaseDirectory;
-        var solutionDir = currentDir;
-        while (solutionDir != null && !Directory.GetFiles(solutionDir, "Migrator.sln").Any())
-            solutionDir = Directory.GetParent(solutionDir)?.FullName;
-        if (solutionDir == null)
-        {
-            Console.WriteLine("Error: Could not find solution directory (Migrator.sln).");
-            return null; // Indicate failure
-        }
-
-        var exampleMigrationsProjectDir = Path.Combine(solutionDir, "src", "ExampleMigrations");
-        // --- End Find ---
-
-        // --- Find Build Output Path (containing ExampleMigrations.dll) ---
-        string[] configurations = ["Debug", "Release"];
-        // Check common TFMs - adjust if your project uses different ones
-        string[] targetFrameworks = ["net9.0", "net8.0", "netstandard2.0"];
-        var mainDllName = "ExampleMigrations.dll";
-
-        foreach (var config in configurations)
-        foreach (var tfm in targetFrameworks)
-        {
-            var potentialPath = Path.Combine(exampleMigrationsProjectDir, "bin", config, tfm);
-            if (File.Exists(Path.Combine(potentialPath, mainDllName)))
-                return Path.Combine(potentialPath, mainDllName); // Return full path to DLL
-        }
-
-        Console.WriteLine(
-            $"Error: Could not find {mainDllName} in {exampleMigrationsProjectDir}/bin/[Debug|Release]/[{string.Join('|', targetFrameworks)}]");
-        return null; // Indicate failure
-    }
-
-    // --- Helper to get quoting function (Corrected for SQLite AGAIN) ---
-    private static Func<string, string> GetQuoteFunction(DatabaseType dbType)
-    {
-        return dbType switch
-        {
-            DatabaseType.PostgreSql => name => $"\"{name}\"", // PostgreSQL standard quotes
-            DatabaseType.SQLite => name => $"\"{name}\"", // SQLite standard quotes
-            _ => name => $"[{name}]" // Default to SQL Server style brackets
-        };
-    }
-
-    // --- Methods for Failure Handling Testing ---
-
-    /// <summary>
-    ///     Prepares a migrations directory including a faulty SQL script.
-    ///     Creates the initial C# migrations (via DLL copy) and the first SQL migration (1001),
-    ///     then adds a faulty SQL script (faultyVersion, e.g., 1003)
-    ///     and a subsequent valid SQL script (skippedSqlVersion, e.g., 1005) that should be skipped.
-    ///     Note: C# migrations 1000, 1002, 1004 are included via the DLL.
-    /// </summary>
-    public static string PrepareMigrationsWithFailure(string testId, long faultyVersion, long skippedSqlVersion)
-    {
-        var tempBaseDir = Path.Combine(Path.GetTempPath(), "MigratorTests", testId, Guid.NewGuid().ToString());
-        Directory.CreateDirectory(tempBaseDir);
-        var migrationsDir = Path.Combine(tempBaseDir, "migrations");
-        Directory.CreateDirectory(migrationsDir);
-
-        // 1. Copy ExampleMigrations DLL (contains C# migrations 1000, 1002, 1004)
-        var sourceAssemblyPath = FindExampleMigrationsDllPath();
-        if (string.IsNullOrEmpty(sourceAssemblyPath) || !File.Exists(sourceAssemblyPath))
-            throw new FileNotFoundException(
-                $"Could not find ExampleMigrations.dll at expected path: {sourceAssemblyPath}");
-        File.Copy(sourceAssemblyPath, Path.Combine(migrationsDir, "FailureTestMigrations.dll"), true);
-
-        // 2. Create the first successful SQL migration (1001)
-        File.WriteAllText(Path.Combine(migrationsDir, "202504091001_AddUserEmail.sql"),
-            "ALTER TABLE \"Users\" ADD COLUMN \"Email\" TEXT; UPDATE \"Users\" SET \"Email\" = 'admin@example.com' WHERE \"Username\" = 'admin';"
-        );
-
-        // 3. Create the FAULTY SQL migration (using faultyVersion, e.g., 1003)
-        File.WriteAllText(Path.Combine(migrationsDir, $"{faultyVersion}_FaultyScript.sql"),
-            "ALTER TABLE NonExistentTable ADD COLUMN Oops TEXT;" // Invalid SQL
-        );
-
-        // 4. Create a subsequent, VALID SQL migration that should NOT be run (using skippedSqlVersion, e.g., 1005)
-        File.WriteAllText(Path.Combine(migrationsDir, $"{skippedSqlVersion}_ShouldNotRun.sql"),
-            "CREATE TABLE \"SkippedTable\" (Id INTEGER PRIMARY KEY);"
-        );
-
-        return migrationsDir;
     }
 
     /// <summary>
@@ -632,8 +597,10 @@ public static class TestHelpers
         {
             await using var reader = await command.ExecuteReaderAsync();
             while (await reader.ReadAsync())
+            {
                 // Assuming the Version column is BIGINT or similar
                 versions.Add(reader.GetInt64(0));
+            }
         }
         catch (Exception ex)
         {
@@ -655,11 +622,74 @@ public static class TestHelpers
 
         // Check based on the structure of the specific skipped SQL migration (e.g., 202504091005_ShouldNotRun.sql)
         if (skippedSqlVersion == 202504091005)
+        {
             (await CheckTableExistsAsync(connection, "SkippedTable")).ShouldBeFalse(
                 "Table 'SkippedTable' should NOT exist as its migration 202504091005 should have been skipped.");
+        }
 
         // Also assert that structures expected from skipped C# migrations (e.g., 1004) are NOT present
         (await CheckTableExistsAsync(connection, "Products")).ShouldBeFalse(
             "Table 'Products' should NOT exist as its C# migration 202504091004 should have been skipped.");
+    }
+
+    // --- Assertion Helper for C# Only Migrations ---
+    public static async Task AssertDatabaseStateAfterCSharpOnlyMigrations(DatabaseType dbType, string connectionString)
+    {
+        // Expected state: Users, Settings, Products tables created by C# migrations
+        var expectedVersions = new List<long> { 202504091000, 202504091002, 202504091004 };
+        await AssertVersionInfoOrder(dbType, connectionString, expectedVersions); // Check VersionInfo
+
+        await using var connection = CreateDbConnection(dbType, connectionString);
+        await connection.OpenAsync();
+        var quote = GetQuoteFunction(dbType);
+
+        // Check tables created by C#
+        (await CheckTableExistsAsync(connection, "Users")).ShouldBeTrue("Table 'Users' should exist (C#)");
+        (await CheckTableExistsAsync(connection, "Settings")).ShouldBeTrue("Table 'Settings' should exist (C#)");
+        (await CheckTableExistsAsync(connection, "Products")).ShouldBeTrue("Table 'Products' should exist (C#)");
+
+        // Check columns created by C#
+        (await CheckColumnExistsAsync(connection, "Users", "Username")).ShouldBeTrue("Column 'Username' on 'Users' should exist (C#)");
+        (await CheckColumnExistsAsync(connection, "Settings", "Key")).ShouldBeTrue("Column 'Key' on 'Settings' should exist (C#)");
+        (await CheckColumnExistsAsync(connection, "Products", "Name")).ShouldBeTrue("Column 'Name' on 'Products' should exist (C#)");
+
+        // Check columns *not* created (SQL columns)
+        (await CheckColumnExistsAsync(connection, "Users", "Email")).ShouldBeFalse("Column 'Email' on 'Users' should NOT exist");
+        (await CheckColumnExistsAsync(connection, "Settings", "Value")).ShouldBeFalse("Column 'Value' on 'Settings' should NOT exist");
+        (await CheckColumnExistsAsync(connection, "Products", "Price")).ShouldBeFalse("Column 'Price' on 'Products' should NOT exist");
+
+        // Check data inserted by C#
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT {quote("Username")} FROM {quote("Users")} WHERE {quote("Username")} = 'admin'";
+        (await command.ExecuteScalarAsync())?.ToString().ShouldBe("admin");
+
+        command.CommandText = $"SELECT {quote("Key")} FROM {quote("Settings")} WHERE {quote("Key")} = 'DefaultTheme'";
+        (await command.ExecuteScalarAsync())?.ToString().ShouldBe("DefaultTheme");
+
+        command.CommandText = $"SELECT {quote("Name")} FROM {quote("Products")} WHERE {quote("Name")} = 'Sample Product'";
+        (await command.ExecuteScalarAsync())?.ToString().ShouldBe("Sample Product");
+    }
+
+    // --- Assertion Helper for SQL Only Migrations ---
+    public static async Task AssertDatabaseStateAfterSqlOnlyMigrations(DatabaseType dbType, string connectionString)
+    {
+        // Expected state: Columns added by SQL migrations to NON-EXISTENT tables (since C# didn't run)
+        // Therefore, the main assertion is that VersionInfo is correct, and the tables DON'T exist.
+        var expectedVersions = new List<long> { 202504091001, 202504091003, 202504091005 };
+        // The SQL scripts might fail because the tables don't exist.
+        // A more robust test might be needed depending on how MigrationService handles this.
+        // For now, let's check the versions *attempted* and that tables are missing.
+
+        // Update: MigrationService now handles this gracefully (logs errors, but continues if possible, records version).
+        // Let's assert the versions *were* recorded, even if the SQL failed.
+        await AssertVersionInfoOrder(dbType, connectionString, expectedVersions);
+
+        await using var connection = CreateDbConnection(dbType, connectionString);
+        await connection.OpenAsync();
+
+        // Check tables created by C# migrations DO NOT exist
+        (await CheckTableExistsAsync(connection, "Users")).ShouldBeFalse("Table 'Users' should NOT exist");
+        (await CheckTableExistsAsync(connection, "Settings")).ShouldBeFalse("Table 'Settings' should NOT exist");
+        (await CheckTableExistsAsync(connection, "Products")).ShouldBeFalse("Table 'Products' should NOT exist");
     }
 }

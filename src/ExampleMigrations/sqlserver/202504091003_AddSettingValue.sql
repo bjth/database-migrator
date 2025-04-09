@@ -6,5 +6,5 @@ ALTER TABLE [Settings]
 GO
 
 UPDATE [Settings]
-SET [Value] = 'dark'
-WHERE [Key] = 'DefaultTheme'; 
+SET [Value] = 'DefaultValue'
+WHERE [Key] = 'DefaultTheme';

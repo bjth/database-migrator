@@ -7,6 +7,10 @@
         <LangVersion Condition=" '$(TargetFramework)' == 'netstandard2.0' ">8.0</LangVersion>
         <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
         <AssemblyName>ExampleMigrations</AssemblyName>
+        <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+
+        <!-- Specific build output paths for SQL files -->
+        <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     </PropertyGroup>
 
     <ItemGroup>
@@ -33,6 +37,11 @@
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
             <Link>sqlserver\%(RecursiveDir)%(Filename)%(Extension)</Link>
         </Content>
-    </ItemGroup>
+    </ItemGroup>    
+
+    <Target Name="FormatCodeBeforeBuild" BeforeTargets="BeforeBuild">
+        <Exec Command="dotnet format $(MSBuildProjectFullPath) --include-generated --verbosity diagnostic" />
+        <Message Text="Running dotnet format on $(MSBuildProjectFullPath)" Importance="high" />
+    </Target>
 
 </Project>

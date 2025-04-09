@@ -4,5 +4,5 @@ ALTER TABLE "Settings"
     ADD COLUMN "Value" TEXT NULL;
 
 UPDATE "Settings"
-SET "Value" = 'dark'
-WHERE "Key" = 'DefaultTheme'; 
+SET "Value" = 'DefaultValue'
+WHERE "Key" = 'DefaultTheme';

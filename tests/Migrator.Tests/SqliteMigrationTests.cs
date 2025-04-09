@@ -92,7 +92,7 @@ public class SqliteMigrationTests : IDisposable
         });
 
         await TestHelpers.AssertDatabaseStateAfterMigrations(DatabaseType.SQLite, _connectionString);
-        
+
         TestHelpers.CleanupTestMigrations(migrationsDir);
     }
 
@@ -101,7 +101,7 @@ public class SqliteMigrationTests : IDisposable
     {
         // Arrange
         const string testId = "sqlite_interleaved";
-        var migrationsDir = TestHelpers.PrepareInterleavedMigrations(testId);
+        var migrationsDir = TestHelpers.PrepareInterleavedMigrations(testId, DatabaseType.SQLite);
         var logger = _loggerFactory.CreateLogger<MigrationService>();
         var migrationService = new MigrationService(logger);
 
@@ -130,11 +130,14 @@ public class SqliteMigrationTests : IDisposable
 
         // Prepare migrations including one designed to fail at timestamp 1003
         var migrationsDir =
-            TestHelpers.PrepareMigrationsWithFailure(testId, faultyMigrationVersion, skippedSqlMigrationVersion);
+            TestHelpers.PrepareMigrationsWithFailure(testId, DatabaseType.SQLite, faultyMigrationVersion, skippedSqlMigrationVersion);
         var logger = _loggerFactory.CreateLogger<MigrationService>();
         var migrationService = new MigrationService(logger);
         var logFilePath = Path.Combine(Directory.GetCurrentDirectory(), "logs", "migration-error.log");
-        if (File.Exists(logFilePath)) File.Delete(logFilePath); // Clear log before test
+        if (File.Exists(logFilePath))
+        {
+            File.Delete(logFilePath); // Clear log before test
+        }
 
         var exception = await Should.ThrowAsync<Exception>(async () =>
         {
@@ -164,6 +167,48 @@ public class SqliteMigrationTests : IDisposable
         logContent.ShouldContain("Underlying Exception:"); // Check for the original exception details
 
         TestHelpers.CleanupTestMigrations(migrationsDir);
-        if (File.Exists(logFilePath)) File.Delete(logFilePath); // Clean up log file
+        if (File.Exists(logFilePath))
+        {
+            File.Delete(logFilePath); // Clean up log file
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteMigrationsAsync_SQLite_RunsCSharpOnlyMigrationsSuccessfully()
+    {
+        // Arrange
+        var migrationsDir = TestHelpers.PrepareCSharpOnlyMigrations("sqlite_csharp_only");
+        var logger = _loggerFactory.CreateLogger<MigrationService>();
+        var migrationService = new MigrationService(logger);
+
+        // Act
+        await Should.NotThrowAsync(async () =>
+        {
+            await migrationService.ExecuteMigrationsAsync(DatabaseType.SQLite, _connectionString, migrationsDir);
+        });
+
+        // Assert
+        await TestHelpers.AssertDatabaseStateAfterCSharpOnlyMigrations(DatabaseType.SQLite, _connectionString);
+
+        // Cleanup
+        TestHelpers.CleanupTestMigrations(migrationsDir);
+    }
+
+    [Fact]
+    public async Task ExecuteMigrationsAsync_SQLite_RunsSqlOnlyMigrationsSuccessfully()
+    {
+        // Arrange
+        var migrationsDir = TestHelpers.PrepareSqlOnlyMigrations("sqlite_sql_only", DatabaseType.SQLite);
+        var logger = _loggerFactory.CreateLogger<MigrationService>();
+        var migrationService = new MigrationService(logger);
+
+        // Act
+        await migrationService.ExecuteMigrationsAsync(DatabaseType.SQLite, _connectionString, migrationsDir);
+
+        // Assert
+        await TestHelpers.AssertDatabaseStateAfterSqlOnlyMigrations(DatabaseType.SQLite, _connectionString);
+
+        // Cleanup
+        TestHelpers.CleanupTestMigrations(migrationsDir);
     }
 }

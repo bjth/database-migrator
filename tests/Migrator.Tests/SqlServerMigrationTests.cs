@@ -59,4 +59,67 @@ public class SqlServerMigrationTests : IntegrationTestBase
 
         TestHelpers.CleanupTestMigrations(migrationsDir);
     }
+
+    [Fact]
+    public async Task ExecuteMigrationsAsync_SqlServer_RunsCSharpOnlyMigrationsSuccessfully()
+    {
+        // Arrange
+        var migrationsDir = TestHelpers.PrepareCSharpOnlyMigrations("sqlserver_csharp_only");
+        var logger = LoggerFactory.CreateLogger<MigrationService>();
+        var migrationService = new MigrationService(logger);
+
+        // Act
+        await Should.NotThrowAsync(async () =>
+        {
+            await migrationService.ExecuteMigrationsAsync(DatabaseType.SqlServer, ConnectionString!, migrationsDir);
+        });
+
+        // Assert
+        await TestHelpers.AssertDatabaseStateAfterCSharpOnlyMigrations(DatabaseType.SqlServer, ConnectionString!);
+
+        // Cleanup
+        TestHelpers.CleanupTestMigrations(migrationsDir);
+    }
+
+    [Fact]
+    public async Task ExecuteMigrationsAsync_SqlServer_RunsSqlOnlyMigrationsSuccessfully()
+    {
+        // Arrange
+        var migrationsDir = TestHelpers.PrepareSqlOnlyMigrations("sqlserver_sql_only", DatabaseType.SqlServer);
+        var logger = LoggerFactory.CreateLogger<MigrationService>();
+        var migrationService = new MigrationService(logger);
+
+        // Act
+        await migrationService.ExecuteMigrationsAsync(DatabaseType.SqlServer, ConnectionString!, migrationsDir);
+
+        // Assert
+        await TestHelpers.AssertDatabaseStateAfterSqlOnlyMigrations(DatabaseType.SqlServer, ConnectionString!);
+
+        // Cleanup
+        TestHelpers.CleanupTestMigrations(migrationsDir);
+    }
+
+    [Fact]
+    public async Task ExecuteMigrationsAsync_SqlServer_RunsInterleavedMigrationsInOrder()
+    {
+        // Arrange
+        const string testId = "sqlserver_interleaved";
+        var migrationsDir = TestHelpers.PrepareInterleavedMigrations(testId, DatabaseType.SqlServer);
+        var logger = LoggerFactory.CreateLogger<MigrationService>();
+        var migrationService = new MigrationService(logger);
+
+        // Act
+        await Should.NotThrowAsync(async () =>
+        {
+            await migrationService.ExecuteMigrationsAsync(DatabaseType.SqlServer, ConnectionString!, migrationsDir);
+        });
+
+        // Assert
+        await TestHelpers.AssertDatabaseStateAfterInterleavedMigrations(DatabaseType.SqlServer, ConnectionString!);
+        await TestHelpers.AssertVersionInfoOrder(DatabaseType.SqlServer, ConnectionString!,
+            TestHelpers.GetExpectedInterleavedVersions());
+
+        // Cleanup
+        TestHelpers.CleanupTestMigrations(migrationsDir);
+    }
 }

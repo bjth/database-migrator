@@ -61,4 +61,67 @@ public class PostgreSqlMigrationTests : IntegrationTestBase
 
         TestHelpers.CleanupTestMigrations(migrationsDir);
     }
+
+    [Fact]
+    public async Task ExecuteMigrationsAsync_PostgreSql_RunsCSharpOnlyMigrationsSuccessfully()
+    {
+        // Arrange
+        var migrationsDir = TestHelpers.PrepareCSharpOnlyMigrations("postgres_csharp_only");
+        var logger = LoggerFactory.CreateLogger<MigrationService>();
+        var migrationService = new MigrationService(logger);
+
+        // Act
+        await Should.NotThrowAsync(async () =>
+        {
+            await migrationService.ExecuteMigrationsAsync(DatabaseType.PostgreSql, ConnectionString!, migrationsDir);
+        });
+
+        // Assert
+        await TestHelpers.AssertDatabaseStateAfterCSharpOnlyMigrations(DatabaseType.PostgreSql, ConnectionString!);
+
+        // Cleanup
+        TestHelpers.CleanupTestMigrations(migrationsDir);
+    }
+
+    [Fact]
+    public async Task ExecuteMigrationsAsync_PostgreSql_RunsSqlOnlyMigrationsSuccessfully()
+    {
+        // Arrange
+        var migrationsDir = TestHelpers.PrepareSqlOnlyMigrations("postgres_sql_only", DatabaseType.PostgreSql);
+        var logger = LoggerFactory.CreateLogger<MigrationService>();
+        var migrationService = new MigrationService(logger);
+
+        // Act
+        await migrationService.ExecuteMigrationsAsync(DatabaseType.PostgreSql, ConnectionString!, migrationsDir);
+
+        // Assert
+        await TestHelpers.AssertDatabaseStateAfterSqlOnlyMigrations(DatabaseType.PostgreSql, ConnectionString!);
+
+        // Cleanup
+        TestHelpers.CleanupTestMigrations(migrationsDir);
+    }
+
+    [Fact]
+    public async Task ExecuteMigrationsAsync_PostgreSql_RunsInterleavedMigrationsInOrder()
+    {
+        // Arrange
+        const string testId = "postgres_interleaved";
+        var migrationsDir = TestHelpers.PrepareInterleavedMigrations(testId, DatabaseType.PostgreSql);
+        var logger = LoggerFactory.CreateLogger<MigrationService>();
+        var migrationService = new MigrationService(logger);
+
+        // Act
+        await Should.NotThrowAsync(async () =>
+        {
+            await migrationService.ExecuteMigrationsAsync(DatabaseType.PostgreSql, ConnectionString!, migrationsDir);
+        });
+
+        // Assert
+        await TestHelpers.AssertDatabaseStateAfterInterleavedMigrations(DatabaseType.PostgreSql, ConnectionString!);
+        await TestHelpers.AssertVersionInfoOrder(DatabaseType.PostgreSql, ConnectionString!,
+            TestHelpers.GetExpectedInterleavedVersions());
+
+        // Cleanup
+        TestHelpers.CleanupTestMigrations(migrationsDir);
+    }
 }

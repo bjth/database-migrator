@@ -167,7 +167,7 @@ public class XUnitLogger(ITestOutputHelper outputHelper, string categoryName) : 
         {
             outputHelper.WriteLine(
                 $"[{DateTime.Now:HH:mm:ss} {logLevel.ToString().ToUpperInvariant()[..3]}] {categoryName}: {formatter(state, exception)}");
-            
+
             if (exception != null)
             {
                 outputHelper.WriteLine(exception.ToString());

@@ -6,6 +6,7 @@
         <Nullable>enable</Nullable>
         <IsPackable>false</IsPackable>
         <IsTestProject>true</IsTestProject>
+        <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     </PropertyGroup>
 
     <ItemGroup>
@@ -38,5 +39,10 @@
     <ItemGroup>
         <ProjectReference Include="..\..\src\Migrator.Core\Migrator.Core.csproj"/>
     </ItemGroup>
+
+    <Target Name="FormatCodeBeforeBuild" BeforeTargets="BeforeBuild">
+        <Exec Command="dotnet format $(MSBuildProjectFullPath) --include-generated --verbosity diagnostic" />
+        <Message Text="Running dotnet format on $(MSBuildProjectFullPath)" Importance="high" />
+    </Target>
 
 </Project>

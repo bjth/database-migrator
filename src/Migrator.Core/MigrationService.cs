@@ -2,6 +2,7 @@ using System.Reflection;
 using FluentMigrator;
 using FluentMigrator.Infrastructure;
 using FluentMigrator.Runner;
+using FluentMigrator.Runner.Exceptions;
 using FluentMigrator.Runner.VersionTableInfo;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -62,21 +63,50 @@ public class MigrationService(ILogger<MigrationService> logger)
         try
         {
             // 3. Load C# migration metadata
-            var csharpMigrations = loader.LoadMigrations();
-            logger.LogInformation("Loaded {Count} C# migrations from assemblies.", csharpMigrations.Count);
+            IEnumerable<KeyValuePair<long, IMigrationInfo>> csharpMigrations = [];
+            try
+            {
+                csharpMigrations = [.. loader.LoadMigrations()];
+                logger.LogInformation("Loaded {Count} C# migrations from assemblies.", csharpMigrations.Count());
+            }
+            catch (MissingMigrationsException)
+            {
+                if (sqlMigrationTasks.Count > 0)
+                {
+                    logger.LogWarning("No C# migration classes found in assemblies, but SQL migrations were discovered. Proceeding with SQL migrations only.");
+                }
+                else
+                {
+                    // If neither C# nor SQL migrations found, re-throw is appropriate, though the later check handles this too.
+                    logger.LogWarning("No C# migration classes found in assemblies and no SQL migrations discovered.");
+                    // Let the process continue to the `sortedMigrations.Count == 0` check below.
+                }
+            }
 
             // 4. Combine C# and SQL migrations into a single, sortable list
             // Define a local record or tuple to hold combined info
             var allMigrations =
                 new List<(long Version, string Description, IMigrationInfo? CSharpInfo, MigrationTask? SqlTask)>();
 
+            // Iterate over the KeyValuePair collection
             foreach (var kvp in csharpMigrations)
             {
-                var attr = kvp.Value.Migration.GetType().GetCustomAttribute<MigrationAttribute>();
-                var description = attr?.Description ?? $"C# Migration: {kvp.Value.Migration.GetType().Name}";
-                allMigrations.Add((kvp.Key, description, kvp.Value, null)); // Add C# migration info
-                logger.LogTrace("Adding C# Migration: Version={Version}, Type={TypeName}", kvp.Key,
-                    kvp.Value.Migration.GetType().Name);
+                var migrationInfo = kvp.Value; // Get the MigrationInfo from the pair
+                var migrationType = migrationInfo.Migration.GetType();
+                var migrationAttribute = migrationType.GetCustomAttribute<MigrationAttribute>();
+
+                if (migrationAttribute == null)
+                {
+                    logger.LogWarning("Could not find MigrationAttribute on type {TypeName}. Skipping this C# migration.", migrationType.Name);
+                    continue;
+                }
+
+                long version = migrationAttribute.Version;
+                string description = migrationAttribute.Description ?? $"C# Migration: {migrationType.Name}";
+
+                // Add C# migration info using kvp.Key and migrationInfo
+                allMigrations.Add((kvp.Key, description, migrationInfo, null));
+                logger.LogTrace("Adding C# Migration: Version={Version}, Type={TypeName}", kvp.Key, migrationType.Name);
             }
 
             foreach (var sqlTask in sqlMigrationTasks.Where(sqlTask => sqlTask.Type == MigrationType.Sql))
@@ -91,9 +121,10 @@ public class MigrationService(ILogger<MigrationService> logger)
             var sortedMigrations = allMigrations.OrderBy(m => m.Version).ToList();
             logger.LogDebug("Total migrations found (C# + SQL): {Count}. Sorted by version.", sortedMigrations.Count);
 
+            // *** ADJUSTMENT: Check if *any* migrations (C# or SQL) exist ***
             if (sortedMigrations.Count == 0)
             {
-                logger.LogWarning("No migrations (C# or SQL) found to apply.");
+                logger.LogWarning("No migrations (C# or SQL) found to apply in {Path}.", migrationsPath);
                 logger.LogInformation("Migration process completed successfully (no migrations executed).");
                 return; // Nothing more to do
             }
@@ -324,7 +355,7 @@ public class MigrationService(ILogger<MigrationService> logger)
         return serviceCollection.BuildServiceProvider(false);
     }
 
-    // Load assemblies from path, excluding those named like migrations, 
+    // Load assemblies from path, excluding those named like migrations,
     // and verifying they actually contain IMigration types.
     private List<Assembly> LoadActualAssembliesFromPath(string path)
     {

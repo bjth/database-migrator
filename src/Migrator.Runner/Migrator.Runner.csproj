@@ -16,6 +16,12 @@
         <TargetFramework>net9.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
+        <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     </PropertyGroup>
+
+    <Target Name="FormatCodeBeforeBuild" BeforeTargets="BeforeBuild">
+        <Exec Command="dotnet format $(MSBuildProjectFullPath) --include-generated --verbosity diagnostic" />
+        <Message Text="Running dotnet format on $(MSBuildProjectFullPath)" Importance="high" />
+    </Target>
 
 </Project>
