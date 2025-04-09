@@ -51,8 +51,8 @@ jobs:
       id: build-and-push
       uses: docker/build-push-action@v5
       with:
-        context: . # Context must be repo root for COPY commands
-        file: ./src/Migrator.Runner/Dockerfile # Re-add leading ./
+        context: . # Context must be repo root
+        file: ${{ github.workspace }}/src/Migrator.Runner/Dockerfile # Use absolute path in runner
         push: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
