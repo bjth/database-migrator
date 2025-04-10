@@ -85,7 +85,7 @@ public class MigrationService(ILogger<MigrationService> logger, IMigrationScopeF
         }
         catch (MissingMigrationsException)
         {
-            logger.LogWarning(
+            logger.LogInformation(
                 sqlMigrationTasks.Count != 0
                     ? "No C# migration classes found, but SQL migrations were discovered. Proceeding with SQL only."
                     : "No C# migration classes found and no SQL migrations discovered.");
@@ -167,12 +167,6 @@ public class MigrationService(ILogger<MigrationService> logger, IMigrationScopeF
         try
         {
             await ExecuteJobHandlerAsync(job, context);
-
-            if (job is SqlMigrationJob sqlJob)
-            {
-                context.VersionLoader.UpdateVersionInfo(sqlJob.Version, sqlJob.Description);
-                logger.LogDebug("Recorded version {Version} for SQL migration (after execution).", job.Version);
-            }
         }
         catch (Exception ex)
         {
@@ -190,6 +184,8 @@ public class MigrationService(ILogger<MigrationService> logger, IMigrationScopeF
                 break;
             case SqlMigrationJob sqlJob:
                 await context.SqlHandler.ExecuteAsync(sqlJob);
+                context.VersionLoader.UpdateVersionInfo(sqlJob.Version, sqlJob.Description);
+                logger.LogDebug("Recorded version {Version} for SQL migration (after execution).", job.Version);
                 break;
             default:
                 logger.LogError("Encountered unknown MigrationJob type: {JobType} for version {Version}",
