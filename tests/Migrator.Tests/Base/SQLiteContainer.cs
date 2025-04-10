@@ -13,27 +13,23 @@ namespace Migrator.Tests.Base;
 /// This allows the MigrationTestBase to handle SQLite initialization and cleanup
 /// uniformly with container-based databases.
 /// </summary>
-public sealed class SQLiteContainer : IDatabaseContainer // Implement both interfaces
+public sealed class SQLiteContainer : IDatabaseContainer
 {
     private readonly string _dbFilePath;
-    private string _connectionString;
+    private readonly string _connectionString;
 
     public SQLiteContainer()
     {
         var dbFileName =
-            // Generate a unique filename for each test instance
             $"TestDb_{Guid.NewGuid()}.sqlite";
-        // Store the full path for file operations
         _dbFilePath = Path.Combine(Directory.GetCurrentDirectory(), dbFileName);
-        // Construct the connection string
         _connectionString =
-            $"Data Source={_dbFilePath};Cache=Shared"; // Use Cache=Shared for potential multi-connection scenarios if needed
+            $"Data Source={_dbFilePath};Cache=Shared";
 
-        // Set dummy state properties required by IContainer
-        Id = Guid.NewGuid().ToString("d"); // Provide a unique dummy ID
-        Name = $"/sqlite_mock_{Id.Substring(0, 8)}";
-        State = TestcontainersStates.Running; // Assume it's "running" once created
-        Hostname = "localhost"; // SQLite runs locally
+        Id = Guid.NewGuid().ToString("d");
+        Name = $"/sqlite_mock_{Id[..8]}";
+        State = TestcontainersStates.Running;
+        Hostname = "localhost";
     }
 
     // --- IContainer/IDatabaseContainer Implementation ---
@@ -43,16 +39,13 @@ public sealed class SQLiteContainer : IDatabaseContainer // Implement both inter
     public string Name { get; }
     public string IpAddress { get; } = "127.0.0.1";
     public string MacAddress { get; } = Guid.CreateVersion7().ToString();
-    public string Hostname { get; } // Required by IDatabaseContainer
+    public string Hostname { get; }
     public IImage Image { get; } = new DockerImage("null/null");
 
-    // Mock implementation - SQLite doesn't use ports like Docker containers
     public ushort GetMappedPublicPort(ushort privatePort) => 0;
 
-    // Returns the dynamically generated SQLite connection string
     public string GetConnectionString() => _connectionString;
 
-    // Represents the "state" of the file-based database
     public TestcontainersStates State { get; private set; }
     public TestcontainersHealthStatus Health { get; } = TestcontainersHealthStatus.Healthy;
     public long HealthCheckFailingStreak { get; } = 0;
@@ -94,39 +87,31 @@ public sealed class SQLiteContainer : IDatabaseContainer // Implement both inter
 
     public Task StartAsync(CancellationToken ct = default)
     {
-        // "Starting" the container means ensuring a clean slate:
-        // 1. Ensure the directory exists (though CurrentDirectory usually does)
-        // 2. Delete the DB file if it exists from a previous run.
         if (File.Exists(_dbFilePath))
         {
-            // Attempt cleanup before starting fresh
             try
             {
-                SqliteConnection.ClearAllPools(); // Important before delete
+                SqliteConnection.ClearAllPools();
                 File.Delete(_dbFilePath);
             }
             catch (IOException ex)
             {
-                // Log or handle error if deletion fails (e.g., file locked)
                 Console.WriteLine($"[WARN] Pre-start delete failed for '{_dbFilePath}': {ex.Message}");
-                // Depending on requirements, might want to throw here.
             }
         }
 
         State = TestcontainersStates.Running;
-        return Task.CompletedTask; // No async process to start
+        return Task.CompletedTask;
     }
 
     public Task StopAsync(CancellationToken ct = default)
     {
-        // "Stopping" involves clearing connection pools to release file locks.
         try
         {
             SqliteConnection.ClearAllPools();
         }
         catch (Exception ex)
         {
-            // Log potential errors during pool clearing
             Console.WriteLine($"[WARN] Error clearing SQLite pools for '{_dbFilePath}': {ex.Message}");
         }
 
@@ -192,10 +177,8 @@ public sealed class SQLiteContainer : IDatabaseContainer // Implement both inter
     public DateTime PausedTime { get; } = DateTime.UtcNow;
     public DateTime UnpausedTime { get; } = DateTime.UtcNow;
 
-    // Dispose pattern to ensure file cleanup
     public async ValueTask DisposeAsync()
     {
-        // Ensure pools are cleared before attempting delete
         await StopAsync();
 
         if (File.Exists(_dbFilePath))
@@ -206,11 +189,10 @@ public sealed class SQLiteContainer : IDatabaseContainer // Implement both inter
             }
             catch (IOException ex)
             {
-                // Log error if cleanup fails
                 Console.WriteLine($"[WARN] Dispose failed to delete '{_dbFilePath}': {ex.Message}");
             }
         }
 
-        State = TestcontainersStates.Undefined; // Or another appropriate state post-disposal
+        State = TestcontainersStates.Undefined;
     }
 }

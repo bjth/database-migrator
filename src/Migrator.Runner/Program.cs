@@ -12,7 +12,6 @@ internal static class Program
 {
     private static async Task<int> Main(string[] args)
     {
-        // Basic Serilog configuration done after parsing args
         try
         {
             var parserResult = Parser.Default.ParseArguments<Options>(args);
@@ -26,7 +25,7 @@ internal static class Program
                     Log.Information("Using DB Type: {DbType}, Connection: ***, Path: {Path}", opts.DatabaseType, opts.MigrationsPath);
                     await RunMigrations(opts);
                     Log.Information("Migrator.Runner finished successfully.");
-                    return 0; // Success exit code
+                    return 0;
                 },
                 async errs =>
                 {
@@ -37,17 +36,16 @@ internal static class Program
                     }
 
                     Log.Warning("Use --help for usage information.");
-                    await Task.CompletedTask; // Need async lambda
-                    return 1; // Failure exit code
+                    await Task.CompletedTask;
+                    return 1;
                 });
 
-            // Ensure we have a return path
             return parserResult.Tag == ParserResultType.Parsed ? 0 : 1;
         }
         catch (Exception ex)
         {
             Log.Fatal(ex, "An unhandled exception occurred during migration execution.");
-            return -1; // Unhandled exception exit code
+            return -1;
         }
         finally
         {
@@ -57,10 +55,10 @@ internal static class Program
 
     private static void ConfigureSerilog(LogEventLevel level)
     {
-        Log.CloseAndFlush(); // Close the bootstrap logger
+        Log.CloseAndFlush();
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Is(level)
-            .MinimumLevel.Override("Microsoft", LogEventLevel.Warning) // Reduce noise from framework logs
+            .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
             .Enrich.FromLogContext()
             .WriteTo.Console(outputTemplate:
                 "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")

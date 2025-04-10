@@ -17,9 +17,7 @@ public static class XUnitLoggerExtensions
     /// <returns>The logging builder.</returns>
     public static ILoggingBuilder AddXUnit(this ILoggingBuilder builder, ITestOutputHelper outputHelper)
     {
-        // Add the output helper itself to DI if needed by other services
         builder.Services.AddSingleton(outputHelper);
-        // Add the custom provider
         builder.AddProvider(new XUnitLoggerProvider(outputHelper));
         return builder;
     }
@@ -35,7 +33,6 @@ public class XUnitLoggerProvider(ITestOutputHelper outputHelper) : ILoggerProvid
 
     public void Dispose()
     {
-        // No resources to dispose in this simple provider
         GC.SuppressFinalize(this);
     }
 }
@@ -43,15 +40,12 @@ public class XUnitLoggerProvider(ITestOutputHelper outputHelper) : ILoggerProvid
 // Custom Logger for xUnit
 public class XUnitLogger(ITestOutputHelper outputHelper, string categoryName) : ILogger
 {
-    // Simple implementation: no scope support
     public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
-    // Log everything passed to it for simplicity in tests
     public bool IsEnabled(LogLevel logLevel) => true;
 
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
     {
-        // Using try-catch to prevent logging errors from stopping tests
         try
         {
             outputHelper.WriteLine(

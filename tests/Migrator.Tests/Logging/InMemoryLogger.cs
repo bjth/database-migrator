@@ -18,13 +18,11 @@ public class InMemoryLogger : ILogger
     {
         _categoryName = categoryName;
         _logEntries = logEntries ?? throw new ArgumentNullException(nameof(logEntries));
-        _outputAction = outputAction ?? (_ => { }); // Default to no-op
+        _outputAction = outputAction ?? (_ => { });
     }
 
-    // Scope handling is not implemented for this simple logger.
     public IDisposable? BeginScope<TState>(TState state) where TState : notnull => default!;
 
-    // Always enabled to capture all log levels.
     public bool IsEnabled(LogLevel logLevel) => true;
 
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
@@ -37,17 +35,16 @@ public class InMemoryLogger : ILogger
         var message = formatter(state, exception);
         if (string.IsNullOrEmpty(message) && exception == null)
         {
-            return; // Don't log empty messages without exceptions
+            return;
         }
 
         var entry = new InMemoryLogEntry(logLevel, eventId, message, exception);
         _logEntries.Add(entry);
 
-        // Format for output action, similar to standard console loggers
         var outputMessage = $"[{logLevel.ToString().Substring(0, 3).ToUpper()}] [{_categoryName}] {message}";
         if (exception != null)
         {
-            outputMessage += $"\n{exception}"; // Append exception details on a new line
+            outputMessage += $"\n{exception}";
         }
         _outputAction(outputMessage);
     }

@@ -1,7 +1,7 @@
 -- PostgreSQL: Add Price column to Products - 202504091005
 
 ALTER TABLE "Products"
-    ADD COLUMN "Price" DECIMAL(18, 2) NULL; -- Use DECIMAL for price
+    ADD COLUMN "Price" DECIMAL(18, 2) NULL;
 
 UPDATE "Products"
 SET "Price" = 9.99

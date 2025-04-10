@@ -1,7 +1,7 @@
 -- SQLite: Add Price column to Products - 202504091005
 
 ALTER TABLE "Products"
-    ADD COLUMN "Price" REAL NULL; -- Use REAL for decimal/float in SQLite
+    ADD COLUMN "Price" REAL NULL;
 
 UPDATE "Products"
 SET "Price" = 9.99

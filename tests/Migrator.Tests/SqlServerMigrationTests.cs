@@ -1,35 +1,29 @@
 using DotNet.Testcontainers.Builders;
 using DotNet.Testcontainers.Containers;
-using Microsoft.Extensions.Logging; // Added for LogLevel
+using Microsoft.Extensions.Logging;
 using Migrator.Core;
-using Migrator.Tests.Base; // Add using for base class namespace
-using Testcontainers.MsSql; // Add for MsSqlBuilder
-// using Migrator.Tests.Fixtures; // Removed
+using Migrator.Tests.Base;
+using Testcontainers.MsSql;
 using Xunit.Abstractions;
 
 namespace Migrator.Tests;
 
-[Collection("MigrationTests")]
-public class SqlServerMigrationTests : MigrationTestBase // Remove generic and fixture
+public class SqlServerMigrationTests : MigrationTestBase
 {
-    // Constructor only takes output helper
     public SqlServerMigrationTests(ITestOutputHelper outputHelper)
         : base(outputHelper)
     { }
 
-    // Implement abstract methods
     protected override DatabaseType GetTestDatabaseType() => DatabaseType.SqlServer;
 
     protected override IContainer BuildTestContainer()
     {
-        // Configure and build SQL Server container
         return new MsSqlBuilder()
-            .WithImage("mcr.microsoft.com/mssql/server:2022-latest") // Use appropriate image
-            .WithPassword("yourStrong(!)Password") // Testcontainers requires a strong password for SQL Server
+            .WithImage("mcr.microsoft.com/mssql/server:2022-latest")
+            .WithPassword("yourStrong(!)Password")
             .Build();
     }
 
-    // --- Test Methods --- (Adjust to use base class helpers correctly)
     [Fact]
     public async Task Test_SqlServer_AppliesMigrationsSuccessfully()
     {
@@ -49,7 +43,6 @@ public class SqlServerMigrationTests : MigrationTestBase // Remove generic and f
         await AssertTableExistsAsync(dbType, connectionString, "Users");
     }
 
-    // ... Adapt other SQL Server tests similarly ...
     [Fact]
     public async Task SqlServer_Applies_SQL_Only_Migrations()
     {
@@ -78,27 +71,22 @@ public class SqlServerMigrationTests : MigrationTestBase // Remove generic and f
         var dbType = DatabaseType.SqlServer;
         var connectionString = GetConnectionString();
         var migrationsPath = GetTestSpecificMigrationsPath("CSharpOnly", dbType);
-        // Use actual versions from ExampleMigrations.dll
-        long version1 = 202504091000L; // CreateInitialSchema
-        long version2 = 202504091002L;   // CreateSettingsTable
-        long version3 = 202504091004L;   // CreateProductsTable
+        long version1 = 202504091000L;
+        long version2 = 202504091002L;
+        long version3 = 202504091004L;
 
-        // Prepare DLL (using INHERITED helper)
         await PrepareCSharpMigrationDll(migrationsPath);
 
         await RunMigrationsAsync(dbType, connectionString, migrationsPath);
 
-        // Assert based on the actual versions in the DLL
         await AssertMigrationAppliedAsync(dbType, connectionString, migrationsPath, version1);
         await AssertMigrationAppliedAsync(dbType, connectionString, migrationsPath, version2);
         await AssertMigrationAppliedAsync(dbType, connectionString, migrationsPath, version3);
 
-        // Assert tables created by these C# migrations exist
         await AssertTableExistsAsync(dbType, connectionString, "Users");
         await AssertTableExistsAsync(dbType, connectionString, "Settings");
         await AssertTableExistsAsync(dbType, connectionString, "Products");
 
-        // Assert VersionInfo count
         var count = await GetVersionInfoRowCountAsync(dbType, connectionString, migrationsPath);
         Assert.Equal(3, count);
     }
@@ -234,16 +222,8 @@ public class SqlServerMigrationTests : MigrationTestBase // Remove generic and f
         long versionFail = 202504091001;
         long version3 = 202504091002L;
         long version4 = 202504091004L;
-        // var expectedErrorLogFile = Path.Combine(AppContext.BaseDirectory, "migration-error.log"); // Keep if needed
 
-        // if (File.Exists(expectedErrorLogFile))
-        // {
-        //     File.Delete(expectedErrorLogFile);
-        // }
-
-        // Prepare the failing SQL script
-        await PrepareSqlFile(migrationsPath, versionFail, "CREATE TABLE Fail;;"); // Invalid syntax for SQL Server
-        // Prepare the C# migrations DLL
+        await PrepareSqlFile(migrationsPath, versionFail, "CREATE TABLE Fail;;");
         await PrepareCSharpMigrationDll(migrationsPath);
 
         OutputHelper.WriteLine("Running migration expected to fail...");
@@ -253,35 +233,22 @@ public class SqlServerMigrationTests : MigrationTestBase // Remove generic and f
 
         OutputHelper.WriteLine($"Caught expected exception: {ex.Message}");
 
-        // Check migrations *before* failure were applied
-        await AssertMigrationAppliedAsync(dbType, connectionString, migrationsPath, version1); // C# V0
+        await AssertMigrationAppliedAsync(dbType, connectionString, migrationsPath, version1);
         await AssertTableExistsAsync(dbType, connectionString, "Users");
-        // V2 and V4 come AFTER the failing SQL script in execution order, so they should NOT be applied
-        // await AssertMigrationAppliedAsync(dbType, connectionString, migrationsPath, version3); // C# V2
-        // await AssertTableExistsAsync(dbType, connectionString, "Settings");
-        // await AssertMigrationAppliedAsync(dbType, connectionString, migrationsPath, version4); // C# V4
-        // await AssertTableExistsAsync(dbType, connectionString, "Products");
+        await AssertMigrationNotAppliedAsync(dbType, connectionString, migrationsPath, versionFail);
+        await AssertTableDoesNotExistAsync(dbType, connectionString, "Fail");
 
-        // Check FAILING migration was NOT applied (rolled back)
-        await AssertMigrationNotAppliedAsync(dbType, connectionString, migrationsPath, versionFail); // SQL Fail
-        // Table should not exist if creation failed
-        await AssertTableDoesNotExistAsync(dbType, connectionString, "Fail"); // Assuming table name is "Fail"
-
-        // Check migrations *after* failure were NOT applied (halted)
-        await AssertMigrationNotAppliedAsync(dbType, connectionString, migrationsPath, version3); // C# V2
+        await AssertMigrationNotAppliedAsync(dbType, connectionString, migrationsPath, version3);
         await AssertTableDoesNotExistAsync(dbType, connectionString, "Settings");
-        await AssertMigrationNotAppliedAsync(dbType, connectionString, migrationsPath, version4); // C# V4
+        await AssertMigrationNotAppliedAsync(dbType, connectionString, migrationsPath, version4);
         await AssertTableDoesNotExistAsync(dbType, connectionString, "Products");
 
-        // Check VersionInfo count - should include ONLY successful migrations before failure
         var count = await GetVersionInfoRowCountAsync(dbType, connectionString, migrationsPath);
-        Assert.Equal(1, count); // Only V0 should be recorded
+        Assert.Equal(1, count);
 
-        // Verify logs
         AssertLogContainsSubstring(LogLevel.Error, $"CRITICAL ERROR applying SQL migration {versionFail}");
-        // AssertLogContainsSubstring(LogLevel.Information, "Transaction rollback attempted successfully"); // Log not generated
-        AssertLogContainsSubstring(LogLevel.Error, "Rolling back transaction"); // Check handler logs rollback attempt
-        AssertLogDoesNotContainSubstring(LogLevel.Information, $"Applying SQL migration: {version3}"); // Check V2 didn't start
-        AssertLogDoesNotContainSubstring(LogLevel.Information, $"Applying C# migration: {version4}"); // Check V4 didn't start
+        AssertLogContainsSubstring(LogLevel.Error, "Rolling back transaction");
+        AssertLogDoesNotContainSubstring(LogLevel.Information, $"Applying SQL migration: {version3}");
+        AssertLogDoesNotContainSubstring(LogLevel.Information, $"Applying C# migration: {version4}");
     }
 }

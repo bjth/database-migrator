@@ -18,7 +18,6 @@ public class MigrationJobFactory(ILogger<MigrationJobFactory> logger)
         var csharpJobs = new List<CSharpMigrationJob>();
         var sqlJobs = new List<SqlMigrationJob>();
 
-        // Create C# Jobs
         foreach (var kvp in csharpMigrations)
         {
             var migrationInfo = kvp.Value;
@@ -31,14 +30,13 @@ public class MigrationJobFactory(ILogger<MigrationJobFactory> logger)
                 continue;
             }
 
-            var version = kvp.Key; // Use key from loader result
+            var version = kvp.Key;
             var description = migrationAttribute.Description ?? $"C# Migration: {migrationType.Name}";
 
             csharpJobs.Add(new CSharpMigrationJob(version, description, migrationInfo));
             logger.LogTrace("Created C# Migration Job: Version={Version}, Type={TypeName}", version, migrationType.Name);
         }
 
-        // Create SQL Jobs
         foreach (var sqlTask in sqlMigrationTasks.Where(sqlTask => sqlTask.Type == MigrationType.Sql))
         {
             var version = sqlTask.Timestamp;
@@ -47,7 +45,6 @@ public class MigrationJobFactory(ILogger<MigrationJobFactory> logger)
             logger.LogTrace("Created SQL Migration Job: Version={Version}, File={FileName}", version, sqlTask.OriginalFilename);
         }
 
-        // Check for duplicate versions across C# and SQL migrations
         var csharpVersions = csharpJobs.Select(j => j.Version).ToHashSet();
         var sqlVersions = sqlJobs.Select(j => j.Version);
         var duplicateVersions = sqlVersions.Where(v => csharpVersions.Contains(v)).ToList();
@@ -59,7 +56,6 @@ public class MigrationJobFactory(ILogger<MigrationJobFactory> logger)
             throw new InvalidOperationException($"Duplicate migration versions found between C# and SQL migrations: {duplicatesString}. Each migration must have a unique version number.");
         }
 
-        // Combine and sort all jobs by version number
         var allJobs = csharpJobs.Cast<MigrationJob>().Concat(sqlJobs.Cast<MigrationJob>()).ToList();
         var sortedJobs = allJobs.OrderBy(m => m.Version).ToList();
         logger.LogDebug("Created and sorted {Count} migration jobs (C# + SQL).", sortedJobs.Count);

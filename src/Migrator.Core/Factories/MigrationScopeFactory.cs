@@ -96,7 +96,6 @@ public class MigrationScopeFactory(ILoggerFactory loggerFactory) : IMigrationSco
                 // Using LoadFrom context. Consider AssemblyLoadContext if isolation/unloading is needed.
                 var assembly = Assembly.LoadFrom(dllFile);
 
-                // Check if assembly actually contains public IMigration types
                 if (assembly.GetExportedTypes().Any(t => typeof(IMigration).IsAssignableFrom(t) && t is { IsAbstract: false, IsClass: true }))
                 {
                     assemblies.Add(assembly);

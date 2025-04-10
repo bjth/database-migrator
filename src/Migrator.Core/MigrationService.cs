@@ -1,5 +1,4 @@
 using FluentMigrator.Infrastructure;
-using FluentMigrator.Runner;
 using FluentMigrator.Runner.Exceptions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -9,43 +8,34 @@ using IMigrationContext = Migrator.Core.Abstractions.IMigrationContext;
 
 namespace Migrator.Core;
 
-// Inject IMigrationScopeFactory
 public class MigrationService(ILogger<MigrationService> logger, IMigrationScopeFactory migrationScopeFactory)
 {
-    // Store IMigrationScopeFactory
     private readonly IMigrationScopeFactory _migrationScopeFactory =
         migrationScopeFactory ?? throw new ArgumentNullException(nameof(migrationScopeFactory));
 
     public async Task ExecuteMigrationsAsync(DatabaseType dbType, string connectionString, string migrationsPath)
     {
         logger.LogInformation("Starting migration process for DB: {DbType}, Path: {Path}", dbType, migrationsPath);
-        // logger.LogDebug("Connection String: {ConnectionString}", connectionString); // Avoid logging by default
 
-        // Initial Validation
         ValidateMigrationsPath(migrationsPath);
 
-        // Discover SQL tasks early
         var sqlMigrationTasks = DiscoverSqlMigrations(migrationsPath);
 
-        // Create Scope and Context
         using var scope = _migrationScopeFactory.CreateMigrationScope(dbType, connectionString, migrationsPath);
 
         var context = ResolveMigrationContext(scope);
 
         try
         {
-            // Prepare jobs
             var csharpMigrations = LoadCSharpMigrations(context, sqlMigrationTasks);
             var sortedJobs = PrepareMigrationJobs(context, csharpMigrations, sqlMigrationTasks, migrationsPath);
             if (sortedJobs.Count == 0)
             {
-                return; // Exit if no jobs
+                return;
             }
 
-            // Load version info
             LoadAppliedVersionInfo(context);
 
-            // Apply jobs
             await ApplyMigrationJobsAsync(sortedJobs, context);
 
             logger.LogInformation("Migration process completed successfully.");
@@ -71,18 +61,14 @@ public class MigrationService(ILogger<MigrationService> logger, IMigrationScopeF
     {
         try
         {
-            // Revert to resolving the context directly, assuming it's registered
             var context = scope.ServiceProvider.GetRequiredService<IMigrationContext>();
             logger.LogDebug("Resolved IMigrationContext from the migration scope.");
             return context;
         }
-        catch (Exception ex) // Catch potential resolution errors or errors during dependency creation
+        catch (Exception ex)
         {
-            // Log the failure and throw a more specific exception
-            // If an inner exception exists, it's likely the more relevant error (e.g., DB issue during FM setup)
             var errorToThrow = ex.InnerException ?? ex;
             logger.LogError(errorToThrow, "Failed to resolve IMigrationContext or its dependencies from the provided scope. Error: {ErrorMessage}", errorToThrow.Message);
-            // Wrap in a new exception to clearly indicate the failure point
             throw new InvalidOperationException("Failed to resolve IMigrationContext from the provided scope. See inner exception for details.", errorToThrow);
         }
     }
@@ -92,7 +78,7 @@ public class MigrationService(ILogger<MigrationService> logger, IMigrationScopeF
     {
         try
         {
-            var csharpMigrations = context.Loader.LoadMigrations().ToList(); // Materialize
+            var csharpMigrations = context.Loader.LoadMigrations().ToList();
             logger.LogInformation("Loaded {Count} C# migrations using loader from dynamic scope.", csharpMigrations.Count);
             return csharpMigrations;
         }
@@ -105,14 +91,13 @@ public class MigrationService(ILogger<MigrationService> logger, IMigrationScopeF
 
             return [];
         }
-        // Consider catching other potential exceptions from LoadMigrations if necessary
     }
 
     private List<MigrationJob> PrepareMigrationJobs(
         IMigrationContext context,
         IEnumerable<KeyValuePair<long, IMigrationInfo>> csharpMigrations,
         List<MigrationTask> sqlMigrationTasks,
-        string migrationsPath) // Added path for logging
+        string migrationsPath)
     {
         var sortedJobs = context.JobFactory.CreateJobs(csharpMigrations, sqlMigrationTasks);
         logger.LogDebug("Total migration jobs created: {Count}.", sortedJobs.Count);
@@ -137,21 +122,18 @@ public class MigrationService(ILogger<MigrationService> logger, IMigrationScopeF
     private async Task ApplyMigrationJobsAsync(List<MigrationJob> sortedJobs, IMigrationContext context)
     {
         logger.LogInformation("Applying migrations in interleaved order...");
-        var appliedInThisRun = new HashSet<long>(); // Track versions applied in this execution
+        var appliedInThisRun = new HashSet<long>();
 
         foreach (var job in sortedJobs)
         {
-            // Check 1: Already applied in a previous run (from initial load)
             if (context.VersionLoader.VersionInfo.HasAppliedMigration(job.Version))
             {
                 logger.LogInformation("Skipping already applied migration (from previous run): {Version} - {Description}",
                     job.Version, job.Description);
-                // Ensure it's tracked for this run too, in case logic relies on it
                 appliedInThisRun.Add(job.Version);
                 continue;
             }
 
-            // Check 2: Already applied earlier in *this* run (e.g., duplicate SQL script version)
             if (appliedInThisRun.Contains(job.Version))
             {
                 logger.LogWarning("Skipping migration {Version} - {Description} as a migration with the same version was already applied in this run.",
@@ -159,30 +141,19 @@ public class MigrationService(ILogger<MigrationService> logger, IMigrationScopeF
                 continue;
             }
 
-            // --> Check 3: Out-of-order check (NEW) <--
-            // Get the max applied version considering both previous runs and what's been done in this run so far
-            var allAppliedVersions = context.VersionLoader.VersionInfo.AppliedMigrations().Concat(appliedInThisRun);
-            var currentMaxApplied = allAppliedVersions.Any() ? allAppliedVersions.Max() : 0L; // Use 0L for long type
+            var allAppliedVersions =
+                context.VersionLoader.VersionInfo.AppliedMigrations().Concat(appliedInThisRun).ToList();
 
-            if (currentMaxApplied > 0 && job.Version < currentMaxApplied) // Only warn if a previous migration exists
+            var currentMaxApplied = allAppliedVersions.Count != 0 ? allAppliedVersions.Max() : 0L;
+
+            if (currentMaxApplied > 0 && job.Version < currentMaxApplied)
             {
                 logger.LogWarning("Applying out-of-order migration: Version {JobVersion} is being applied after a higher version {MaxAppliedVersion} has already been applied.",
                                  job.Version, currentMaxApplied);
             }
 
-            // Proceed to apply the job
-            try
-            {
-                await ApplySingleJobAsync(job, context);
-                // Mark as applied *for this run* after successful execution
-                appliedInThisRun.Add(job.Version);
-            }
-            catch (Exception ex) // ApplySingleJobAsync now re-throws critical errors
-            {
-                // Logged and handled within ApplySingleJobAsync/HandleJobExecutionErrorAsync
-                // Re-throw to stop the entire migration process as per the handling logic
-                throw;
-            }
+            await ApplySingleJobAsync(job, context);
+            appliedInThisRun.Add(job.Version);
         }
     }
 
@@ -196,7 +167,6 @@ public class MigrationService(ILogger<MigrationService> logger, IMigrationScopeF
         {
             await ExecuteJobHandlerAsync(job, context);
 
-            // If it's an SQL job, update the version info here after successful script execution
             if (job is SqlMigrationJob sqlJob)
             {
                 context.VersionLoader.UpdateVersionInfo(sqlJob.Version, sqlJob.Description);
@@ -205,9 +175,8 @@ public class MigrationService(ILogger<MigrationService> logger, IMigrationScopeF
         }
         catch (Exception ex)
         {
-            await HandleJobExecutionErrorAsync(ex, job, context, migrationTypeString, false);
-            // Re-throw the critical exception to stop the overall process
-            throw; // The handler already created the specific exception to throw
+            await HandleJobExecutionErrorAsync(ex, job, migrationTypeString);
+            throw;
         }
     }
 
@@ -222,7 +191,6 @@ public class MigrationService(ILogger<MigrationService> logger, IMigrationScopeF
                 await context.SqlHandler.ExecuteAsync(sqlJob);
                 break;
             default:
-                // This case should ideally not be hit if JobFactory is correct, but good for safety
                 logger.LogError("Encountered unknown MigrationJob type: {JobType} for version {Version}",
                     job.GetType().Name, job.Version);
                 throw new InvalidOperationException(
@@ -230,8 +198,7 @@ public class MigrationService(ILogger<MigrationService> logger, IMigrationScopeF
         }
     }
 
-    private async Task HandleJobExecutionErrorAsync(Exception ex, MigrationJob job, IMigrationContext context,
-        string migrationTypeString, bool success)
+    private async Task HandleJobExecutionErrorAsync(Exception ex, MigrationJob job, string migrationTypeString)
     {
         var errorSource = job switch
         {
@@ -243,30 +210,24 @@ public class MigrationService(ILogger<MigrationService> logger, IMigrationScopeF
             $"CRITICAL ERROR applying {migrationTypeString} migration {job.Version} ({errorSource}). Halting execution.";
         logger.LogError(ex, errorMessage);
 
-        // Log details about the original error before throwing
         await WriteErrorLogAsync($"{errorMessage}\nUnderlying Exception:\n{ex}");
-        // Throw a new exception that signals a critical migration failure
         throw new Exception(errorMessage, ex);
     }
 
     private async Task HandleOuterExceptionAsync(Exception ex)
     {
-        // Catch exceptions from setup/loading or the main loop if they weren't caught inside
         if (ex is not InvalidOperationException && !ex.Message.StartsWith("CRITICAL ERROR"))
         {
             const string errorMessage = "An unexpected error occurred during the migration process.";
             logger.LogError(ex, errorMessage);
             await WriteErrorLogAsync($"General Migration Error:\n{ex}");
-            // Re-throw general errors as a new exception to indicate overall failure clearly
             throw new Exception(errorMessage, ex);
         }
 
-        // Log and re-throw specific exceptions (like context resolution failure or critical migration errors)
         logger.LogDebug(ex, "Re-throwing specific exception caught during migration process.");
-        throw ex; // Re-throw the original specific exception
+        throw ex;
     }
 
-    // Helper method to write errors to a log file
     private async Task WriteErrorLogAsync(string message)
     {
         try
@@ -284,7 +245,6 @@ public class MigrationService(ILogger<MigrationService> logger, IMigrationScopeF
         }
     }
 
-    // Discover SQL migrations by file name
     private List<MigrationTask> DiscoverSqlMigrations(string migrationsPath)
     {
         var tasks = new List<MigrationTask>();

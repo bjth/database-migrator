@@ -1,6 +1,6 @@
-using System.Data.Common; // Add for DbConnection
-using System.Threading.Tasks; // Add for Task
-using DotNet.Testcontainers.Containers; // Add for IContainer
+using System.Data.Common;
+using System.Threading.Tasks;
+using DotNet.Testcontainers.Containers;
 using FluentMigrator.Runner;
 using FluentMigrator.Runner.Processors;
 using FluentMigrator.Runner.VersionTableInfo;
@@ -17,31 +17,24 @@ using Migrator.Tests.Logging;
 using Npgsql;
 using Xunit.Abstractions;
 using Xunit.Sdk;
-// For thread-safe logger list
-
-// For List
 
 namespace Migrator.Tests.Base;
 
 /// <summary>
 /// Base class for migration integration tests, managing container lifetime per test.
 /// </summary>
-[Collection("MigrationTests")] // Keep collection for potential sequential execution needs
-public abstract class MigrationTestBase : IAsyncLifetime // Removed IClassFixture<TFixture>, TFixture generic
+public abstract class MigrationTestBase : IAsyncLifetime
 {
-    // No longer injecting Fixture
     protected readonly ITestOutputHelper OutputHelper;
-    protected IServiceProvider ServiceProvider = null!; // Will be created in InitializeAsync
+    protected IServiceProvider ServiceProvider = null!;
     protected ILoggerFactory TestLoggerFactory = null!;
     protected readonly string BaseMigrationsPath;
     private readonly InMemoryLoggerProvider _inMemoryLoggerProvider;
 
-    // Container and DB details - managed per test
     private IContainer _container = null!;
     private string _connectionString = string.Empty;
     private DatabaseType _dbType;
 
-    // Abstract methods for derived classes
     protected abstract IContainer BuildTestContainer();
     protected abstract DatabaseType GetTestDatabaseType();
 
@@ -50,7 +43,6 @@ public abstract class MigrationTestBase : IAsyncLifetime // Removed IClassFixtur
         OutputHelper = outputHelper;
         _inMemoryLoggerProvider = new InMemoryLoggerProvider(outputHelper.WriteLine);
 
-        // Create logger factory early for InitializeAsync logging
         TestLoggerFactory = LoggerFactory.Create(builder =>
         {
             builder
@@ -62,25 +54,19 @@ public abstract class MigrationTestBase : IAsyncLifetime // Removed IClassFixtur
         Directory.CreateDirectory(BaseMigrationsPath);
     }
 
-    // Moved from ContainerFixtureBase
     private void ConfigureServiceProvider()
     {
         var services = new ServiceCollection();
-        services.AddSingleton(TestLoggerFactory); // Use the already created factory
+        services.AddSingleton(TestLoggerFactory);
         services.AddLogging();
 
-        // Register ONLY the factory and the service that uses it for the test run.
-        // The factory is responsible for the internal FM and context setup.
         services.AddScoped<IMigrationScopeFactory, MigrationScopeFactory>();
         services.AddScoped<MigrationService>();
 
-        // This service provider lives per-test, so Scoped is appropriate.
         services.AddFluentMigratorCore()
-            // Removed .UsingVersionTableMetaData<CustomVersionTableMetaData>()
             .ConfigureRunner(rb =>
             {
-                // Basic config - specific provider added based on DbType
-                switch (_dbType) // Use the _dbType field determined in InitializeAsync
+                switch (_dbType)
                 {
                     case DatabaseType.SqlServer: rb.AddSqlServer(); break;
                     case DatabaseType.PostgreSql: rb.AddPostgres(); break;
@@ -92,11 +78,9 @@ public abstract class MigrationTestBase : IAsyncLifetime // Removed IClassFixtur
             .Configure<FluentMigratorLoggerOptions>(options => { options.ShowSql = true; options.ShowElapsedTime = true; })
             .Configure<ProcessorOptions>(opt => { opt.Timeout = TimeSpan.FromSeconds(120); });
 
-        // Register the custom metadata implementation itself AND the interface mapping
         services.AddScoped<CustomVersionTableMetaData>();
-        services.AddScoped<IVersionTableMetaData, CustomVersionTableMetaData>(); // Added back
+        services.AddScoped<IVersionTableMetaData, CustomVersionTableMetaData>();
 
-        // Other dependencies needed by MigrationContext
         services.AddScoped<IMigrationContext, MigrationContext>();
 
         ServiceProvider = services.BuildServiceProvider(validateScopes: true);
@@ -107,25 +91,20 @@ public abstract class MigrationTestBase : IAsyncLifetime // Removed IClassFixtur
         var logger = TestLoggerFactory.CreateLogger($"{GetType().Name}.InitializeAsync");
         logger.LogInformation("=== Starting Test Initialize ===");
 
-        // 1. Determine DB Type first
         _dbType = GetTestDatabaseType();
         logger.LogInformation("Test Database Type: {DbType}", _dbType);
 
-        // 2. Build Container (handles SQLite via SQLiteContainer now)
         logger.LogInformation("Building container/wrapper for {DbType}...", _dbType);
         _container = BuildTestContainer();
         if (_container == null)
         {
-            // Should not happen if BuildTestContainer is implemented correctly for all types
             throw new InvalidOperationException($"BuildTestContainer returned null for DbType: {_dbType}. This should not happen.");
         }
 
-        // 3. Start Container (SQLiteContainer StartAsync handles file cleanup)
         logger.LogInformation("Starting container/wrapper for {DbType}...", _dbType);
         await _container.StartAsync();
         logger.LogInformation("Container/wrapper {ContainerName} ({ContainerId}) started.", _container.Name, _container.Id);
 
-        // 4. Get Connection String (via IDatabaseContainer interface)
         if (_container is IDatabaseContainer dbContainer)
         {
             _connectionString = dbContainer.GetConnectionString();
@@ -140,20 +119,17 @@ public abstract class MigrationTestBase : IAsyncLifetime // Removed IClassFixtur
             throw new InvalidOperationException($"Container for {_dbType} does not implement IDatabaseContainer.");
         }
 
-        // 5. Configure DI Service Provider for this test
         logger.LogInformation("Configuring ServiceProvider for test (Using DbType: {DbType})...", _dbType);
-        ConfigureServiceProvider(); // ConfigureServiceProvider uses _dbType
+        ConfigureServiceProvider();
         logger.LogInformation("ServiceProvider configured.");
 
-        // 6. Clean Database Schema (Applies to all DB types)
         logger.LogInformation("Starting pre-test database schema cleanup for {DbType}...", _dbType);
-        string versionTableName = ""; // Initialize
+        string versionTableName = "";
 
         try
         {
-            // Resolve IVersionTableMetaData to get the correct table name
             string? schemaName = null;
-            using (var scope = ServiceProvider.CreateScope()) // Use the test's SP
+            using (var scope = ServiceProvider.CreateScope())
             {
                 var versionTableMeta = scope.ServiceProvider.GetRequiredService<IVersionTableMetaData>();
                 versionTableName = versionTableMeta.TableName;
@@ -169,7 +145,6 @@ public abstract class MigrationTestBase : IAsyncLifetime // Removed IClassFixtur
             await using var connection = await CreateDbConnectionAsync(_dbType, _connectionString);
             await using var command = connection.CreateCommand();
 
-            // --- Step 1: Drop user tables --- // (Only implemented PostgreSQL example)
             if (_dbType == DatabaseType.PostgreSql)
             {
                 logger.LogInformation("Dropping existing user tables in public schema (PostgreSQL)...");
@@ -213,7 +188,6 @@ public abstract class MigrationTestBase : IAsyncLifetime // Removed IClassFixtur
                 }
             }
 
-            // --- Step 2: Drop VersionInfo table --- //
             logger.LogInformation("Dropping VersionInfo table ('{Table}')...", versionTableName);
             string dropVersionTableSql;
             switch (_dbType)
@@ -243,7 +217,6 @@ public abstract class MigrationTestBase : IAsyncLifetime // Removed IClassFixtur
         catch (Exception ex)
         {
             logger.LogError(ex, "Error during pre-test database schema cleanup for {DbType} (Table: {Table}). Test execution might be affected.", _dbType, versionTableName ?? "<unknown>");
-            // Re-throw critical cleanup errors
             throw;
         }
         finally
@@ -258,7 +231,6 @@ public abstract class MigrationTestBase : IAsyncLifetime // Removed IClassFixtur
         var logger = TestLoggerFactory.CreateLogger($"{GetType().Name}.DisposeAsync");
         logger.LogInformation("=== Starting Test Dispose ===");
 
-        // Dispose ServiceProvider
         if (ServiceProvider is IAsyncDisposable asyncDisposableProvider)
         {
             logger.LogDebug("Disposing ServiceProvider asynchronously...");
@@ -270,17 +242,13 @@ public abstract class MigrationTestBase : IAsyncLifetime // Removed IClassFixtur
             disposableProvider.Dispose();
         }
 
-        // Stop and Dispose Container (handles SQLite via SQLiteContainer now)
         if (_container != null)
         {
             logger.LogInformation("Stopping and disposing container/wrapper {ContainerName} ({ContainerId})...", _container.Name, _container.Id);
             try
             {
-                // Stop might not be strictly needed if DisposeAsync handles cleanup,
-                // but call it for consistency with Testcontainers lifecycle.
-                // SQLiteContainer's Stop clears pools.
                 await _container.StopAsync();
-                await _container.DisposeAsync(); // SQLiteContainer's Dispose deletes the file.
+                await _container.DisposeAsync();
                 logger.LogInformation("Container/wrapper stopped and disposed.");
             }
             catch (Exception ex)
@@ -296,8 +264,6 @@ public abstract class MigrationTestBase : IAsyncLifetime // Removed IClassFixtur
         logger.LogInformation("=== Finished Test Dispose ===");
     }
 
-    // --- Helper Methods --- (Now use internal fields)
-
     protected string GetConnectionString()
     {
         if (string.IsNullOrEmpty(_connectionString))
@@ -307,12 +273,10 @@ public abstract class MigrationTestBase : IAsyncLifetime // Removed IClassFixtur
         return _connectionString;
     }
 
-    // GetTestSpecificMigrationsPath remains the same
-    protected string GetTestSpecificMigrationsPath(string testId, DatabaseType dbType) // Keep dbType param for path generation
+    protected string GetTestSpecificMigrationsPath(string testId, DatabaseType dbType)
     {
         var path = Path.Combine(BaseMigrationsPath, $"{dbType}_{testId}");
 
-        // --> Clean the directory before use <--
         if (Directory.Exists(path))
         {
             OutputHelper.WriteLine($"Clearing existing test migration directory: {path}");
@@ -324,10 +288,9 @@ public abstract class MigrationTestBase : IAsyncLifetime // Removed IClassFixtur
         return path;
     }
 
-    // RunMigrationsAsync now uses the test's ServiceProvider
     protected async Task RunMigrationsAsync(DatabaseType dbType, string connectionString, string migrationsPath)
     {
-        using var scope = ServiceProvider.CreateScope(); // Use the test's SP
+        using var scope = ServiceProvider.CreateScope();
         var migrationService = scope.ServiceProvider.GetRequiredService<MigrationService>();
         var logger = TestLoggerFactory.CreateLogger(GetType());
         logger.LogInformation("Executing migrations (Base Class) for DB={DbType}, Path={Path}", dbType, migrationsPath);
@@ -337,7 +300,6 @@ public abstract class MigrationTestBase : IAsyncLifetime // Removed IClassFixtur
         logger.LogInformation("Migration execution completed (Base Class).");
     }
 
-    // Assertion helpers now use the test's ServiceProvider
     protected Task AssertMigrationAppliedAsync(DatabaseType dbType, string connectionString, string migrationsPath,
         long expectedVersion)
     {
@@ -345,11 +307,9 @@ public abstract class MigrationTestBase : IAsyncLifetime // Removed IClassFixtur
         logger.LogDebug("Asserting migration {Version} applied for {DbType}...", expectedVersion, dbType);
         OutputHelper.WriteLine($"Asserting migration {expectedVersion} applied...");
 
-        // Create a scope from the test's ServiceProvider to resolve scoped services
         using var scope = ServiceProvider.CreateScope();
         var scopedProvider = scope.ServiceProvider;
 
-        // Resolve factory *from the created scope*
         var assertScopeFactory = scopedProvider.GetRequiredService<IMigrationScopeFactory>();
         using var assertScope = assertScopeFactory.CreateMigrationScope(dbType, connectionString, migrationsPath);
         try
@@ -378,7 +338,6 @@ public abstract class MigrationTestBase : IAsyncLifetime // Removed IClassFixtur
         logger.LogDebug("Asserting migration {Version} NOT applied for {DbType}...", expectedMissingVersion, dbType);
         OutputHelper.WriteLine($"Asserting migration {expectedMissingVersion} NOT applied...");
 
-        // Create a scope from the test's ServiceProvider
         using var scope = ServiceProvider.CreateScope();
         var scopedProvider = scope.ServiceProvider;
 
@@ -395,14 +354,13 @@ public abstract class MigrationTestBase : IAsyncLifetime // Removed IClassFixtur
         catch (Xunit.Sdk.FalseException ex)
         {
             logger.LogError(ex, "Assertion (for NOT applied) failed for migration {Version}", expectedMissingVersion);
-            // --> Re-resolve context and loader inside catch <--
             using var errorScope = assertScopeFactory.CreateMigrationScope(dbType, connectionString, migrationsPath);
             var errorContext = errorScope.ServiceProvider.GetRequiredService<IMigrationContext>();
             var errorVersionLoader = errorContext.VersionLoader;
-            errorVersionLoader.LoadVersionInfo(); // Ensure it's loaded
+            errorVersionLoader.LoadVersionInfo();
             var appliedVersions = string.Join(", ", errorVersionLoader.VersionInfo.AppliedMigrations().OrderBy(v => v));
             logger.LogInformation("Failure Details: Currently applied migrations reported by VersionLoader: [{AppliedVersions}]", appliedVersions);
-            throw; // Re-throw the assertion exception
+            throw;
         }
 
         return Task.CompletedTask;
@@ -428,12 +386,9 @@ public abstract class MigrationTestBase : IAsyncLifetime // Removed IClassFixtur
 
     protected async Task<DbConnection> CreateDbConnectionAsync(DatabaseType dbType, string connectionString)
     {
-        // This method might now primarily use _dbType and _connectionString internal fields,
-        // but keeping parameters allows flexibility if needed elsewhere.
-        // Ensure connection string is initialized
-        var cs = GetConnectionString(); // Use helper to ensure it's ready
-        connectionString = cs; // Override param with internal value for safety
-        dbType = _dbType; // Override param with internal value for safety
+        var cs = GetConnectionString();
+        connectionString = cs;
+        dbType = _dbType;
 
         DbConnection connection = dbType switch
         {
@@ -447,17 +402,10 @@ public abstract class MigrationTestBase : IAsyncLifetime // Removed IClassFixtur
         return connection;
     }
 
-    // Other assertion helpers like AssertTableExistsAsync, GetTableRowCountAsync etc.
-    // need to be checked to ensure they use the internal _dbType, _connectionString,
-    // and the test's ServiceProvider correctly.
-
-    // Example modification for GetVersionInfoRowCountAsync:
     protected async Task<long> GetVersionInfoRowCountAsync(DatabaseType dbType, string connectionString,
         string migrationsPath)
     {
         var logger = TestLoggerFactory.CreateLogger(GetType());
-        // Resolve factory from the test's ServiceProvider
-        // Need to create a scope here too!
         using var scope = ServiceProvider.CreateScope();
         var scopedProvider = scope.ServiceProvider;
         var scopeFactory = scopedProvider.GetRequiredService<IMigrationScopeFactory>();
@@ -467,26 +415,23 @@ public abstract class MigrationTestBase : IAsyncLifetime // Removed IClassFixtur
         var tableName = versionTableMeta.TableName;
         var schemaName = versionTableMeta.SchemaName;
 
-        // Pass internal fields to underlying helper
         return await GetTableRowCountAsync(_dbType, _connectionString, tableName, schemaName);
     }
 
     protected async Task<long> GetTableRowCountAsync(DatabaseType dbType, string connectionString, string tableName,
             string? schemaName = null)
     {
-        // Ensure this method uses the provided dbType and connectionString
         OutputHelper.WriteLine($"Counting rows in table '{tableName}' for {dbType}...");
         await using var connection = await CreateDbConnectionAsync(dbType, connectionString);
         await using var command = connection.CreateCommand();
-        // ... existing switch statement for count SQL ...
         string sql;
         switch (dbType)
         {
             case DatabaseType.SqlServer:
                 schemaName ??= "dbo";
                 sql = $"SELECT COUNT(*) FROM [{schemaName}].[{tableName}];";
-                command.Parameters.Add(new SqlParameter("@SchemaName", schemaName)); // Still needed if schema used in WHERE?
-                command.Parameters.Add(new SqlParameter("@TableName", tableName));   // Still needed if table used in WHERE?
+                command.Parameters.Add(new SqlParameter("@SchemaName", schemaName));
+                command.Parameters.Add(new SqlParameter("@TableName", tableName));
                 break;
             case DatabaseType.PostgreSql:
                 schemaName ??= "public";
@@ -501,7 +446,7 @@ public abstract class MigrationTestBase : IAsyncLifetime // Removed IClassFixtur
             default:
                 OutputHelper.WriteLine($"----> Row count SKIPPED: Not implemented for {dbType}.");
                 Assert.Fail($"Row count not implemented for {dbType}.");
-                return -1; // Should not be reached
+                return -1;
         }
         command.CommandText = sql;
         var result = await command.ExecuteScalarAsync();
@@ -510,8 +455,6 @@ public abstract class MigrationTestBase : IAsyncLifetime // Removed IClassFixtur
         return count;
     }
 
-
-    // PrepareSqlFile remains the same
     protected async Task PrepareSqlFile(string path, long version, string content)
     {
         Directory.CreateDirectory(path);
@@ -521,7 +464,6 @@ public abstract class MigrationTestBase : IAsyncLifetime // Removed IClassFixtur
         OutputHelper.WriteLine($"Prepared SQL file: {filePath}");
     }
 
-    // PrepareCSharpMigrationDll remains the same
     protected async Task PrepareCSharpMigrationDll(string migrationsPath)
     {
         const string sourceDllName = "ExampleMigrations.dll";
@@ -548,7 +490,6 @@ public abstract class MigrationTestBase : IAsyncLifetime // Removed IClassFixtur
         await Task.CompletedTask;
     }
 
-    // Log helpers remain the same
     protected void ClearCapturedLogs()
     {
         _inMemoryLoggerProvider.ClearLogEntries();
@@ -571,12 +512,10 @@ public abstract class MigrationTestBase : IAsyncLifetime // Removed IClassFixtur
         Assert.DoesNotContain(logs, log => log.Level == level && log.Message.Contains(substring, StringComparison.OrdinalIgnoreCase));
     }
 
-    // Add back assertion helpers
     protected async Task AssertTableExistsAsync(DatabaseType dbType, string connectionString, string tableName,
        string? schemaName = null)
     {
         OutputHelper.WriteLine($"Asserting table '{tableName}' exists for {dbType}...");
-        // Use internal fields/helpers
         dbType = _dbType;
         connectionString = GetConnectionString();
 
@@ -621,7 +560,6 @@ public abstract class MigrationTestBase : IAsyncLifetime // Removed IClassFixtur
         string? schemaName = null)
     {
         OutputHelper.WriteLine($"Asserting table '{tableName}' does NOT exist for {dbType}...");
-        // Use internal fields/helpers
         dbType = _dbType;
         connectionString = GetConnectionString();
 

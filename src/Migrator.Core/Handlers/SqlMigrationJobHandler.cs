@@ -1,6 +1,6 @@
-using FluentMigrator; // Keep for File.ReadAllTextAsync
+using System.IO;
+using FluentMigrator;
 using FluentMigrator.Runner;
-// Keep for IVersionLoader
 using Microsoft.Extensions.Logging;
 using Migrator.Core.Abstractions;
 
@@ -12,7 +12,6 @@ namespace Migrator.Core.Handlers;
 /// </summary>
 public class SqlMigrationJobHandler(IMigrationProcessor processor, IVersionLoader versionLoader, ILogger<SqlMigrationJobHandler> logger) : IMigrationJobHandler
 {
-    // Store injected dependencies
     private readonly IMigrationProcessor _processor = processor ?? throw new ArgumentNullException(nameof(processor));
     private readonly IVersionLoader _versionLoader = versionLoader ?? throw new ArgumentNullException(nameof(versionLoader));
     private readonly ILogger<SqlMigrationJobHandler> _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -28,7 +27,6 @@ public class SqlMigrationJobHandler(IMigrationProcessor processor, IVersionLoade
         _logger.LogDebug("Executing SQL migration {Version} from file {FileName}.", sqlJob.Version, sqlJob.SqlTask.OriginalFilename);
         var sqlScript = await File.ReadAllTextAsync(sqlJob.SqlTask.FullPath);
 
-        // Wrap SQL execution in its own transaction
         _logger.LogDebug("Beginning transaction for SQL script {Version}...", sqlJob.Version);
         _processor.BeginTransaction();
         try
@@ -42,9 +40,7 @@ public class SqlMigrationJobHandler(IMigrationProcessor processor, IVersionLoade
             _logger.LogError(ex, "Error executing SQL script {Version} ({FileName}). Rolling back transaction.",
                 sqlJob.Version, sqlJob.SqlTask.OriginalFilename);
             _processor.RollbackTransaction();
-            throw; // Re-throw the exception to halt the overall process
+            throw;
         }
-
-        // Version info update is handled in MigrationService after successful execution
     }
 }

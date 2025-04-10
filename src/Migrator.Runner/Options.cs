@@ -16,6 +16,4 @@ public class Options
 
     [Option('v', "verbose", Default = false, HelpText = "Enable verbose logging.")]
     public bool Verbose { get; set; }
-
-    // Add other options like LogLevel if needed later
 }

@@ -10,10 +10,9 @@ public enum DatabaseType
     SQLite
 }
 
-// Restore the original enum definition
 public enum MigrationType
 {
-    Unknown = 0, // Keep unknown for default/error cases
+    Unknown = 0,
     Dll,
     Sql
 }
@@ -51,7 +50,7 @@ public record MigrationTask
         }
         else
         {
-            return false; // Unsupported file type
+            return false;
         }
 
         task = new MigrationTask
