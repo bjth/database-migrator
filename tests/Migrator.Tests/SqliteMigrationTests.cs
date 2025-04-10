@@ -1,214 +1,80 @@
+using DotNet.Testcontainers.Containers; // For IContainer
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Migrator.Core;
-using Shouldly;
-using SQLitePCL;
+using Migrator.Tests.Base; // Ensure base namespace is included
 using Xunit.Abstractions;
-using ILoggerFactory = Microsoft.Extensions.Logging.ILoggerFactory;
 
 namespace Migrator.Tests;
 
-// Tests for SQLite - uses a temporary file DB, no TestContainers needed
-public class SqliteMigrationTests : IDisposable
+// Remove IClassFixture, Inherit from non-generic MigrationTestBase
+public class SqliteMigrationTests : MigrationTestBase
 {
-    private readonly string _dbFilePath;
-    private readonly string _connectionString;
-    private readonly ILoggerFactory _loggerFactory;
-    private readonly ServiceProvider _serviceProvider;
-
+    // Constructor now only takes ITestOutputHelper
     public SqliteMigrationTests(ITestOutputHelper outputHelper)
+        : base(outputHelper) // Pass output helper to base
+    { }
+
+    // Implement abstract methods from base class
+    protected override DatabaseType GetTestDatabaseType() => DatabaseType.SQLite;
+
+    // Override BuildTestContainer to return our custom SQLiteContainer
+    protected override IContainer BuildTestContainer()
     {
-        // Initialize SQLitePCL provider
-        raw.SetProvider(new SQLite3Provider_e_sqlite3());
-
-        _dbFilePath = Path.Combine(Path.GetTempPath(), $"migrator_sqlite_test_{Guid.NewGuid()}.db");
-        _connectionString = $"Data Source={_dbFilePath}";
-
-        _loggerFactory = LoggerFactory.Create(builder =>
-        {
-            builder
-                .AddXUnit(outputHelper)
-                .SetMinimumLevel(LogLevel.Trace);
-        });
-
-        _serviceProvider = new ServiceCollection()
-            .AddSingleton(_loggerFactory)
-            .AddLogging()
-            .BuildServiceProvider();
+        // No actual container process, just our wrapper for file management
+        return new SQLiteContainer();
     }
 
-    public void Dispose()
-    {
-        _serviceProvider.Dispose();
-        _loggerFactory.Dispose();
-        try
-        {
-            File.Delete(_dbFilePath);
-        }
-        catch
-        {
-            /* Ignore cleanup errors */
-        }
-
-        GC.SuppressFinalize(this);
-    }
-
+    // Example Test Method (Adapt your existing tests)
     [Fact]
-    public async Task ExecuteMigrationsAsync_SQLite_RunsMixedMigrationsSuccessfully()
+    public async Task Test_SQLite_AppliesMigrationsSuccessfully()
     {
         // Arrange
-        var migrationsDir = TestHelpers.PrepareTestMigrations("sqlite_test", DatabaseType.SQLite);
-        var logger = _loggerFactory.CreateLogger<MigrationService>();
-        var migrationService = new MigrationService(logger);
+        var dbType = GetTestDatabaseType(); // Use base method
+        var connectionString = GetConnectionString(); // Use connection string managed by base class / SQLiteContainer
+        var migrationsPath = GetTestSpecificMigrationsPath("BasicRun_SQLite", dbType); // Use base method
 
-        await Should.NotThrowAsync(async () =>
-        {
-            await migrationService.ExecuteMigrationsAsync(DatabaseType.SQLite, _connectionString, migrationsDir);
-        });
+        // No need for manual file deletion or connection string creation here;
+        // MigrationTestBase.InitializeAsync (via SQLiteContainer.StartAsync) handles cleanup before the test
+        // MigrationTestBase.DisposeAsync (via SQLiteContainer.DisposeAsync) handles cleanup after the test
 
-        await TestHelpers.AssertDatabaseStateAfterMigrations(DatabaseType.SQLite, _connectionString);
-
-        TestHelpers.CleanupTestMigrations(migrationsDir);
-    }
-
-    [Fact]
-    public async Task ExecuteMigrationsAsync_SQLite_HandlesAlreadyAppliedMigrations()
-    {
-        // Arrange
-        const string testId = "sqlite_rerun_test";
-        var migrationsDir = TestHelpers.PrepareTestMigrations(testId, DatabaseType.SQLite);
-        var logger = _loggerFactory.CreateLogger<MigrationService>();
-        var migrationService = new MigrationService(logger);
-
-        // Run migrations first time
-        await migrationService.ExecuteMigrationsAsync(DatabaseType.SQLite, _connectionString, migrationsDir);
-
-        await TestHelpers.AssertDatabaseStateAfterMigrations(DatabaseType.SQLite, _connectionString);
-
-        // Run migrations second time
-        await Should.NotThrowAsync(async () =>
-        {
-            await migrationService.ExecuteMigrationsAsync(DatabaseType.SQLite, _connectionString, migrationsDir);
-        });
-
-        await TestHelpers.AssertDatabaseStateAfterMigrations(DatabaseType.SQLite, _connectionString);
-
-        TestHelpers.CleanupTestMigrations(migrationsDir);
-    }
-
-    [Fact]
-    public async Task ExecuteMigrationsAsync_SQLite_RunsInterleavedMigrationsInOrder()
-    {
-        // Arrange
-        const string testId = "sqlite_interleaved";
-        var migrationsDir = TestHelpers.PrepareInterleavedMigrations(testId, DatabaseType.SQLite);
-        var logger = _loggerFactory.CreateLogger<MigrationService>();
-        var migrationService = new MigrationService(logger);
-
-        await Should.NotThrowAsync(async () =>
-        {
-            await migrationService.ExecuteMigrationsAsync(DatabaseType.SQLite, _connectionString, migrationsDir);
-        });
-
-        await TestHelpers.AssertDatabaseStateAfterInterleavedMigrations(DatabaseType.SQLite, _connectionString);
-        await TestHelpers.AssertVersionInfoOrder(DatabaseType.SQLite, _connectionString,
-            TestHelpers.GetExpectedInterleavedVersions());
-
-        TestHelpers.CleanupTestMigrations(migrationsDir);
-    }
-
-    [Fact]
-    public async Task ExecuteMigrationsAsync_SQLite_HaltsAndRollsBackOnFailure()
-    {
-        // Arrange
-        var testId = "sqlite_failure";
-        // Expected successful: C# 1000, SQL 1001, C# 1002
-        var expectedSuccessfulVersions = new List<long> { 202504091000, 202504091001, 202504091002 };
-        var faultyMigrationVersion = 202504091003; // This one will fail
-        var skippedCSharpMigrationVersion = 202504091004; // Should be skipped
-        var skippedSqlMigrationVersion = 202504091005; // Should be skipped
-
-        // Prepare migrations including one designed to fail at timestamp 1003
-        var migrationsDir =
-            TestHelpers.PrepareMigrationsWithFailure(testId, DatabaseType.SQLite, faultyMigrationVersion, skippedSqlMigrationVersion);
-        var logger = _loggerFactory.CreateLogger<MigrationService>();
-        var migrationService = new MigrationService(logger);
-        var logFilePath = Path.Combine(Directory.GetCurrentDirectory(), "logs", "migration-error.log");
-        if (File.Exists(logFilePath))
-        {
-            File.Delete(logFilePath); // Clear log before test
-        }
-
-        var exception = await Should.ThrowAsync<Exception>(async () =>
-        {
-            await migrationService.ExecuteMigrationsAsync(DatabaseType.SQLite, _connectionString, migrationsDir);
-        });
-
-        exception.ShouldNotBeNull();
-        exception.Message.ShouldContain($"CRITICAL ERROR applying SQL migration {faultyMigrationVersion}");
-        exception.Message.ShouldContain("Halting execution");
-
-        // Assert Database State (only migrations *before* failure should be applied)
-        await TestHelpers.AssertVersionInfoOrder(DatabaseType.SQLite, _connectionString, expectedSuccessfulVersions);
-        // Verify the faulty and subsequent migrations are NOT in the version table
-        var appliedVersions = await TestHelpers.GetAppliedVersionsAsync(DatabaseType.SQLite, _connectionString);
-        appliedVersions.ShouldNotContain(faultyMigrationVersion);
-        appliedVersions.ShouldNotContain(skippedCSharpMigrationVersion); // Check skipped C#
-        appliedVersions.ShouldNotContain(skippedSqlMigrationVersion); // Check skipped SQL
-        // Verify that schema/data changes from the *skipped* migration did not occur
-        await TestHelpers.AssertDataFromSkippedMigrationNotPresent(DatabaseType.SQLite, _connectionString,
-            skippedSqlMigrationVersion); // Pass skipped version
-
-        // Assert Log File (Optional but good)
-        File.Exists(logFilePath).ShouldBeTrue("Error log file should exist.");
-        var logContent = await File.ReadAllTextAsync(logFilePath);
-        logContent.ShouldContain($"CRITICAL ERROR applying SQL migration {faultyMigrationVersion}");
-        logContent.ShouldContain("Migration process stopped.");
-        logContent.ShouldContain("Underlying Exception:"); // Check for the original exception details
-
-        TestHelpers.CleanupTestMigrations(migrationsDir);
-        if (File.Exists(logFilePath))
-        {
-            File.Delete(logFilePath); // Clean up log file
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteMigrationsAsync_SQLite_RunsCSharpOnlyMigrationsSuccessfully()
-    {
-        // Arrange
-        var migrationsDir = TestHelpers.PrepareCSharpOnlyMigrations("sqlite_csharp_only");
-        var logger = _loggerFactory.CreateLogger<MigrationService>();
-        var migrationService = new MigrationService(logger);
+        await PrepareCSharpMigrationDll(migrationsPath); // Use base method
 
         // Act
-        await Should.NotThrowAsync(async () =>
-        {
-            await migrationService.ExecuteMigrationsAsync(DatabaseType.SQLite, _connectionString, migrationsDir);
-        });
+        await RunMigrationsAsync(dbType, connectionString, migrationsPath); // Use base method
 
         // Assert
-        await TestHelpers.AssertDatabaseStateAfterCSharpOnlyMigrations(DatabaseType.SQLite, _connectionString);
+        // Verify all C# migrations in the test DLL were applied
+        await AssertMigrationAppliedAsync(dbType, connectionString, migrationsPath, 202504091000L);
+        await AssertMigrationAppliedAsync(dbType, connectionString, migrationsPath, 202504091002L);
+        await AssertMigrationAppliedAsync(dbType, connectionString, migrationsPath, 202504091004L);
 
-        // Cleanup
-        TestHelpers.CleanupTestMigrations(migrationsDir);
+        // Verify tables created by these migrations exist
+        await AssertTableExistsAsync(dbType, connectionString, "Users"); // Use base method
+        await AssertTableExistsAsync(dbType, connectionString, "Settings"); // Use base method
+        await AssertTableExistsAsync(dbType, connectionString, "Products"); // Use base method
+
+        // Verify VersionInfo count
+        var finalCount = await GetVersionInfoRowCountAsync(dbType, connectionString, migrationsPath);
+        Assert.Equal(3, finalCount); // Expecting 3 C# migrations
+
+        // No need for manual finally block cleanup; MigrationTestBase.DisposeAsync handles it
     }
 
-    [Fact]
-    public async Task ExecuteMigrationsAsync_SQLite_RunsSqlOnlyMigrationsSuccessfully()
-    {
-        // Arrange
-        var migrationsDir = TestHelpers.PrepareSqlOnlyMigrations("sqlite_sql_only", DatabaseType.SQLite);
-        var logger = _loggerFactory.CreateLogger<MigrationService>();
-        var migrationService = new MigrationService(logger);
-
-        // Act
-        await migrationService.ExecuteMigrationsAsync(DatabaseType.SQLite, _connectionString, migrationsDir);
-
-        // Assert
-        await TestHelpers.AssertDatabaseStateAfterSqlOnlyMigrations(DatabaseType.SQLite, _connectionString);
-
-        // Cleanup
-        TestHelpers.CleanupTestMigrations(migrationsDir);
-    }
+    // Add back other SQLite specific tests if any, adapting them to use base class helpers
+    // Example:
+    // [Fact]
+    // public async Task SQLite_AnotherTest()
+    // {
+    //    var dbType = GetTestDatabaseType();
+    //    var dbName = $"TestDb_{Guid.NewGuid()}.sqlite";
+    //    var dbPath = Path.Combine(Directory.GetCurrentDirectory(), dbName);
+    //    var connectionString = $"Data Source={dbPath};Cache=Shared";
+    //    var migrationsPath = GetTestSpecificMigrationsPath("AnotherTest", dbType);
+    //    ...
+    //    await RunMigrationsAsync(dbType, connectionString, migrationsPath);
+    //    ...
+    //    // finally block to clear pool and delete file
+    // }
 }

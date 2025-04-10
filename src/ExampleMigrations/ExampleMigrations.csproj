@@ -9,8 +9,8 @@
         <AssemblyName>ExampleMigrations</AssemblyName>
         <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
 
-        <!-- Specific build output paths for SQL files -->
-        <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+        <!-- REMOVED: Specific build output paths for SQL files -->
+        <!-- <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath> -->
     </PropertyGroup>
 
     <ItemGroup>
