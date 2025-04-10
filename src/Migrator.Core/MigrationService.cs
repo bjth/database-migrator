@@ -31,6 +31,7 @@ public class MigrationService(ILogger<MigrationService> logger, IMigrationScopeF
             var sortedJobs = PrepareMigrationJobs(context, csharpMigrations, sqlMigrationTasks, migrationsPath);
             if (sortedJobs.Count == 0)
             {
+                logger.LogInformation("Migration process completed successfully.");
                 return;
             }
 
@@ -276,9 +277,11 @@ public class MigrationService(ILogger<MigrationService> logger, IMigrationScopeF
         {
             logger.LogError(ex, "Error during SQL file discovery in {Path}", migrationsPath);
         }
+        finally
+        {
+            logger.LogInformation("SQL file scan complete. Discovered {Count} SQL migration tasks in {Path}.", tasks.Count, migrationsPath);
+        }
 
-        logger.LogInformation("SQL file scan complete. Discovered {Count} SQL migration tasks in {Path}.", tasks.Count,
-            migrationsPath);
         return tasks;
     }
 }

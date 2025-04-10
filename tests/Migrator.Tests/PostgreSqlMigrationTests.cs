@@ -258,4 +258,51 @@ public class PostgreSqlMigrationTests : MigrationTestBase
         AssertLogContainsSubstring(LogLevel.Error, "Rolling back transaction");
         AssertLogDoesNotContainSubstring(LogLevel.Information, $"Applying SQL migration: {versionNext}");
     }
+
+    [Fact]
+    public async Task PostgreSql_Runs_Successfully_With_Empty_Folder()
+    {
+        var dbType = GetTestDatabaseType();
+        var connectionString = GetConnectionString();
+        var migrationsPath = GetTestSpecificMigrationsPath("EmptyFolder_PG", dbType);
+        // Path is created empty by GetTestSpecificMigrationsPath
+
+        ClearCapturedLogs();
+        await RunMigrationsAsync(dbType, connectionString, migrationsPath);
+
+        // Assert no migrations were applied
+        var count = await GetVersionInfoRowCountAsync(dbType, connectionString, migrationsPath);
+        Assert.Equal(0, count);
+
+        // Assert warnings were logged
+        AssertLogContainsSubstring(LogLevel.Warning, "No assemblies containing migrations found");
+        AssertLogContainsSubstring(LogLevel.Information, "SQL file scan complete. Discovered 0 SQL migration tasks");
+        AssertLogContainsSubstring(LogLevel.Warning, "No migration jobs (C# or SQL) found to apply");
+        AssertLogContainsSubstring(LogLevel.Information, "Migration process completed successfully");
+    }
+
+    [Fact]
+    public async Task PostgreSql_Throws_Exception_For_NonExistent_Folder()
+    {
+        var dbType = GetTestDatabaseType();
+        var connectionString = GetConnectionString(); // Connection might not even be needed, but setup requires it
+        var nonExistentPath = Path.Combine(BaseMigrationsPath, $"NonExistentFolder_{Guid.NewGuid()}");
+
+        // Ensure the path does NOT exist
+        if (Directory.Exists(nonExistentPath))
+        {
+            Directory.Delete(nonExistentPath, true);
+        }
+
+        ClearCapturedLogs();
+        var exception = await Assert.ThrowsAsync<DirectoryNotFoundException>(() =>
+            RunMigrationsAsync(dbType, connectionString, nonExistentPath)
+        );
+
+        Assert.Contains(nonExistentPath, exception.Message);
+        AssertLogContainsSubstring(LogLevel.Error, "Migrations directory not found");
+        AssertLogContainsSubstring(LogLevel.Error, nonExistentPath);
+        // Ensure migration process did not complete successfully
+        AssertLogDoesNotContainSubstring(LogLevel.Information, "Migration process completed successfully");
+    }
 }
